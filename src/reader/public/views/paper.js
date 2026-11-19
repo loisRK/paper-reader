@@ -2,6 +2,7 @@ import { el, clear, progressBar } from './dom.js';
 import { setupNotes } from './notes.js';
 import { setupCardMemos } from './card-memos.js';
 import { createPdfView } from './pdf-view.js';
+import { jobView, watchJob } from './digest.js';
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
@@ -272,6 +273,90 @@ function storeTab(tab) {
   try { localStorage.setItem(TAB_KEY, tab); } catch { /* private mode / blocked storage: keep the default */ }
 }
 
+// Make / remake the digest from the paper view. Returns { button, box, dispose }.
+// The current digest stays on screen while a job runs; on success the user reloads by choice.
+function digestControl({ id, hasDigest, example, actions }) {
+  const box = el('div', { class: 'digest-job', hidden: true });
+  if (!actions.startDigest || example) return { button: null, box, dispose() {} };
+  const button = hasDigest
+    ? el('button', {
+      type: 'button', class: 'btn btn-quiet btn-small remake-btn', text: '요약 다시 만들기',
+      title: '새 요약이 검증을 통과할 때까지 지금 요약은 그대로 둡니다.',
+    })
+    : el('button', { type: 'button', class: 'btn digest-btn', text: '요약 만들기' });
+  const status = el('span', { class: 'job-status', role: 'status' });
+  const cancel = el('button', { type: 'button', class: 'btn btn-quiet btn-small', text: '취소' });
+  const logList = el('ol', {});
+  const logBox = el('details', { class: 'job-log', hidden: true }, el('summary', { text: '로그 보기' }), logList);
+  let watcher = null;
+  let sawBusy = false;
+  let disposed = false;
+
+  const show = (job) => {
+    const v = jobView(job);
+    if (!v) { box.hidden = true; return; }
+    box.hidden = false;
+    box.dataset.tone = v.tone;
+    button.disabled = v.busy;
+    const log = job.log ?? [];
+    logList.replaceChildren(...log.slice(-20).map((l) => el('li', { text: l })));
+    logBox.hidden = !log.length;
+    if (v.busy) {
+      status.textContent = v.text;
+      box.replaceChildren(status, cancel, logBox);
+      cancel.disabled = false;
+      return;
+    }
+    if (job.state === 'done') {
+      const reload = el('button', { type: 'button', class: 'btn btn-small', text: '새로고침', onclick: () => actions.refreshList() });
+      status.textContent = '새 요약이 준비되었습니다';
+      box.replaceChildren(status, reload, logBox);
+      return;
+    }
+    status.textContent = v.text;
+    box.replaceChildren(status, logBox);
+  };
+  const watch = () => {
+    watcher?.stop();
+    const w = watchJob({
+      id,
+      actions,
+      onUpdate(job) {
+        if (disposed || watcher !== w) return;
+        if (jobView(job)?.busy) { sawBusy = true; show(job); return; }
+        // Old results from before this page opened are not shown.
+        if (sawBusy && job) {
+          show(job);
+          // Failures stay tracked so the list row keeps the message until dismissed.
+          if (job.state !== 'failed') actions.digestTracker?.untrack(id);
+        } else box.hidden = true;
+      },
+    });
+    watcher = w;
+    w.start();
+  };
+
+  button.addEventListener('click', async () => {
+    button.disabled = true;
+    try {
+      const job = await actions.startDigest(id);
+      actions.digestTracker?.track(id);
+      sawBusy = true;
+      show(job);
+      watch();
+    } catch (err) {
+      actions.toast(err.message);
+      button.disabled = false;
+    }
+  });
+  cancel.addEventListener('click', async () => {
+    cancel.disabled = true;
+    try { await actions.cancelDigest(id); } catch (err) { actions.toast(err.message); cancel.disabled = false; }
+  });
+  watch(); // a job may already be running (started from the list)
+  return { button, box, dispose() { disposed = true; watcher?.stop(); } };
+}
+
 // data: { id, source, digest, problems, progress, links }
 // actions: { saveProgress(id, progress): Promise, toast(msg) }
 // Returns a dispose() function.
@@ -296,6 +381,7 @@ export function render(container, data, actions) {
   const src = sourcePanel(source, links, () => setSheet(false), data.id);
   const source_ = src.panel;
   const progressSlot = el('div', { class: 'top-progress' });
+  const dj = digestControl({ id: data.id, hasDigest: !!digest, example: data.example === true, actions });
 
   const save = () => {
     actions.saveProgress(data.id, { read: [...state.read], mode: state.mode, focus: state.focus });
@@ -510,7 +596,11 @@ export function render(container, data, actions) {
     if (!digest) {
       flow.append(el('div', { class: 'card empty-card' },
         el('h2', { text: '아직 요약이 없습니다' }),
-        el('p', { text: 'AI로 digest.json을 작성한 뒤 npm run check로 확인하세요. 오른쪽에서 원문은 바로 읽을 수 있습니다.' })));
+        dj.button
+          ? el('p', { text: '요약 만들기를 누르면 선택한 AI 도구가 요약을 쓰고, 서버가 검증한 뒤 저장합니다. 오른쪽에서 원문은 바로 읽을 수 있습니다.' })
+          : el('p', { text: 'AI로 digest.json을 작성한 뒤 npm run check로 확인하세요. 오른쪽에서 원문은 바로 읽을 수 있습니다.' }),
+        dj.button ? el('div', { class: 'empty-actions' }, dj.button) : null,
+        dj.box));
       return;
     }
     if (!cards.length) {
@@ -578,8 +668,10 @@ export function render(container, data, actions) {
       el('a', { class: 'back', href: '#/', text: '← 목록' }),
       el('h1', { class: 'paper-title', tabindex: -1, text: source.meta?.title || data.id }),
       cards.length ? el('div', { class: 'controls' }, modeGroup, focusBtn) : null,
+      digest ? dj.button : null,
       el('button', { type: 'button', class: 'btn btn-quiet sheet-open', 'aria-controls': 'source-panel', text: '원문 보기', onclick: () => setSheet(true) }),
     ),
+    digest ? dj.box : null,
     tk?.text ? el('div', { class: 'takeaway' },
       el('span', { class: 'takeaway-label', text: '핵심' }),
       el('p', { class: 'takeaway-text' }, tk.text, evidenceButton(tk.evidence, showEvidence, null)),
@@ -606,6 +698,7 @@ export function render(container, data, actions) {
   document.addEventListener('keydown', onKey);
   return () => {
     observer?.disconnect();
+    dj.dispose();
     pdf.view?.dispose();
     memos?.dispose();
     notesCtl?.dispose();

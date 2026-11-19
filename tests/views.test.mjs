@@ -530,3 +530,82 @@ test('hashingText: shown only while PDFs are being checked', () => {
   assert.equal(hashingText({ done: 5, total: 5 }), null);
   assert.equal(hashingText(undefined), null);
 });
+
+// ---------- digest button (stage 3, Task 4) ----------
+import { jobView, digestTracker } from '../src/reader/public/views/digest.js';
+import { rowModel } from '../src/reader/public/views/list.js';
+
+test('jobView: running states are busy info with Korean progress text', () => {
+  assert.deepEqual(jobView({ state: 'extracting', attempt: 0, maxAttempts: 3 }), { text: 'PDF 추출 중…', busy: true, tone: 'info' });
+  assert.deepEqual(jobView({ state: 'writing', attempt: 1, maxAttempts: 3 }), { text: '요약 쓰는 중… (1/3번째)', busy: true, tone: 'info' });
+  assert.deepEqual(jobView({ state: 'checking', attempt: 2, maxAttempts: 3 }), { text: '검증 중…', busy: true, tone: 'info' });
+  assert.deepEqual(jobView({ state: 'retrying', attempt: 2, maxAttempts: 3, problems: ['a', 'b', 'c'] }),
+    { text: '검증 문제 3건 — 다시 쓰는 중 (2/3번째)', busy: true, tone: 'info' });
+  // maxAttempts missing → 3; problems missing → 0건
+  assert.equal(jobView({ state: 'writing', attempt: 1 }).text, '요약 쓰는 중… (1/3번째)');
+  assert.equal(jobView({ state: 'retrying', attempt: 3 }).text, '검증 문제 0건 — 다시 쓰는 중 (3/3번째)');
+});
+
+test('jobView: terminal states', () => {
+  assert.deepEqual(jobView({ state: 'done' }), { text: '요약을 만들었습니다', busy: false, tone: 'ok' });
+  assert.deepEqual(jobView({ state: 'failed', message: 'AI 도구 로그인이 필요합니다.' }),
+    { text: '요약을 만들지 못했습니다: AI 도구 로그인이 필요합니다.', busy: false, tone: 'error' });
+  assert.deepEqual(jobView({ state: 'cancelled' }), { text: '취소했습니다', busy: false, tone: 'info' });
+  // No message, or a message that already says it → no "…: " duplication.
+  assert.equal(jobView({ state: 'failed' }).text, '요약을 만들지 못했습니다');
+  assert.equal(jobView({ state: 'failed', message: '요약을 만들지 못했습니다. 서버 로그를 확인하세요.' }).text,
+    '요약을 만들지 못했습니다. 서버 로그를 확인하세요.');
+});
+
+test('jobView: no job / unknown state', () => {
+  assert.equal(jobView(null), null);
+  assert.equal(jobView(undefined), null);
+  assert.equal(jobView({ state: 'weird' }), null);
+});
+
+test('rowModel: digest / extracted / pdf rows', () => {
+  const d = rowModel({ id: 'a b', title: 'T', journal: 'J', date: '2026', state: 'digest', linked: true, cardsRead: 2, cardsTotal: 8 });
+  assert.deepEqual(d, {
+    title: 'T', href: '#/paper/a%20b', meta: 'J · 2026', count: '2/8 카드', showBar: true,
+    tags: [{ text: '요약 있음', class: 'tag-ok' }, { text: 'Zotero', class: 'tag-zotero', title: 'Zotero 항목과 연결됨' }],
+    extract: false, digest: false,
+  });
+  const w = rowModel({ id: 'x', state: 'extracted', cardsTotal: 0 });
+  assert.equal(w.title, 'x');
+  assert.equal(w.meta, '저널 정보 없음');
+  assert.equal(w.count, '카드 없음');
+  assert.equal(w.digest, true);
+  assert.equal(w.extract, false);
+  assert.deepEqual(w.tags, [{ text: '요약 대기', class: 'tag-wait' }]);
+  const p = rowModel({ id: 'f1', title: 'paper.pdf', state: 'pdf', file: 'sub/paper.pdf' });
+  assert.equal(p.href, null);
+  assert.equal(p.meta, 'sub/paper.pdf');
+  assert.equal(p.count, null);
+  assert.equal(p.showBar, false);
+  assert.equal(p.extract, true);
+  assert.equal(p.digest, true);
+  assert.deepEqual(p.tags, [{ text: 'PDF만 있음', class: 'tag-pdf' }]);
+});
+
+test('rowModel: example papers get the 예제 tag (no Zotero tag) and no digest action', () => {
+  const e = rowModel({ id: 'ex', title: 'E', state: 'extracted', linked: true, example: true });
+  assert.equal(e.digest, false);
+  assert.deepEqual(e.tags.map((t) => t.text), ['요약 대기', '예제']);
+});
+
+test('digestTracker: remembers started ids, forgets on untrack, survives storage errors', () => {
+  const mem = new Map();
+  const storage = { getItem: (k) => mem.get(k) ?? null, setItem: (k, v) => mem.set(k, v) };
+  const t = digestTracker(storage);
+  t.track('a'); t.track('b'); t.track('a');
+  assert.deepEqual(t.ids(), ['a', 'b']);
+  assert.deepEqual(digestTracker(storage).ids(), ['a', 'b']);
+  t.untrack('a');
+  assert.deepEqual(digestTracker(storage).ids(), ['b']);
+  const broken = { getItem() { throw new Error('x'); }, setItem() { throw new Error('x'); } };
+  const b = digestTracker(broken);
+  b.track('z');
+  assert.deepEqual(b.ids(), ['z']);
+  assert.deepEqual(digestTracker(null).ids(), []);
+  assert.deepEqual(digestTracker({ getItem: () => '{bad', setItem() {} }).ids(), []);
+});

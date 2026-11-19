@@ -2,6 +2,7 @@
 import * as listView from './views/list.js';
 import * as searchView from './views/search.js';
 import * as paperView from './views/paper.js';
+import { digestTracker } from './views/digest.js';
 
 const app = document.getElementById('app');
 const toastBox = document.getElementById('toast');
@@ -28,8 +29,37 @@ const sendJson = (method, body) => ({
   body: JSON.stringify(body),
 });
 
+function sessionStore() {
+  try { return window.sessionStorage; } catch { return null; }
+}
+
+// Tool detection runs `--version` on the server; ask once per page load.
+let agentsInfo = null;
+
 const actions = {
   toast,
+  // ---- make digest ----
+  agents() {
+    agentsInfo ??= api('/api/agents').catch((err) => { agentsInfo = null; throw err; });
+    return agentsInfo;
+  },
+  async selectAgent(agent) {
+    await api('/api/agents/selected', sendJson('PUT', { agent }));
+    agentsInfo = null;
+    return actions.agents();
+  },
+  startDigest: (id) => api(`/api/papers/${encodeURIComponent(id)}/digest`, sendJson('POST', {})),
+  cancelDigest: (id) => api(`/api/papers/${encodeURIComponent(id)}/digest-job/cancel`, sendJson('POST', {})),
+  // null when the server has no job for this paper (404).
+  async digestJob(id) {
+    try {
+      return await api(`/api/papers/${encodeURIComponent(id)}/digest-job`);
+    } catch (err) {
+      if (err.status === 404) return null;
+      throw err;
+    }
+  },
+  digestTracker: digestTracker(sessionStore()),
   // Folder settings / extract: throw Error(server message); the list view shows it in the toast.
   saveFolders: (folders) => api('/api/library/folders', sendJson('PUT', { folders })),
   extractPaper: (id) => api('/api/library/extract', sendJson('POST', { id })),
@@ -105,7 +135,7 @@ async function route() {
       const [{ papers, folders, hashing }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
       if (seq !== routeSeq) return;
       document.title = 'Paper Reader';
-      listView.render(app, { papers, folders, hashing, searches }, actions);
+      dispose = listView.render(app, { papers, folders, hashing, searches }, actions) ?? null;
     }
     window.scrollTo(0, 0);
     app.querySelector('h1')?.focus({ preventScroll: true });
