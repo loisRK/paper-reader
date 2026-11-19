@@ -49,6 +49,12 @@ export async function listPaperBundles(outputDir, { examplesDir = EXAMPLES_DIR }
 
 // Own papers in outputDir take precedence over an example with the same id.
 // Returns null when the paper (source.json) does not exist or is unreadable in either place.
+// True when any sentence lacks PDF-coordinate rects (needs `npm run extract` again for Zotero sync).
+export function needsReextract(source) {
+  const sentences = Object.values(source?.sentences ?? {});
+  return sentences.some((s) => !Array.isArray(s?.pdfRects) || !s.pdfRects.length);
+}
+
 export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = {}) {
   let dir = path.join(outputDir, id);
   let example = false;
@@ -68,6 +74,7 @@ export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = 
     rawDigest: dig.value ?? null,
     digestError: dig.error ?? null,
     progress: prog.value ?? { ...DEFAULT_PROGRESS },
+    needsReextract: needsReextract(src.value),
   };
 }
 

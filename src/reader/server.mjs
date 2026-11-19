@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
 import { registerPaper } from '../zotero/local.mjs';
+import { createNotesRoutes } from './notes-routes.mjs';
 import { isSafeName, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -94,6 +95,7 @@ export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir } = deps;
   const out = cfg.outputDir;
   const opts = { examplesDir };
+  const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
   async function route(req, res) {
     const port = server.address()?.port;
@@ -108,6 +110,8 @@ export function createServer(cfg, deps = {}) {
       if (method !== 'GET' && method !== 'HEAD') throw new HttpError(405, '허용되지 않는 메서드입니다.');
       return serveStatic(res, url.pathname);
     }
+
+    if (await notesRoutes(req, res, parts, method)) return;
 
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
       const list = (await listPaperBundles(out, opts)).map((b) => {
@@ -135,7 +139,7 @@ export function createServer(cfg, deps = {}) {
       const { digest, problems } = validated(b);
       const z = b.source.zotero ?? {};
       return sendJson(res, 200, {
-        source: b.source, digest, problems, progress: b.progress,
+        source: b.source, digest, problems, progress: b.progress, needsReextract: b.needsReextract,
         links: {
           zoteroPdf: z.attachmentKey ? `zotero://open-pdf/library/items/${z.attachmentKey}` : null,
           zoteroItem: z.itemKey ? `zotero://select/library/items/${z.itemKey}` : null,

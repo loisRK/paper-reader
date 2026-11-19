@@ -339,3 +339,28 @@ test('authorize 200 with missing key or bad JSON -> http error', async () => {
   });
   await rejectsCode(createZoteroWriter(CFG, { fetchImpl: f2, authStore: memStore() }).authorize(), 'http');
 });
+
+test('resetInfo clears cached server info but keeps the single-use key', async () => {
+  let version = '10.0.1';
+  const f = fakeFetch((u) => {
+    if (isAuthz(u)) return res(200, { key: 'ONCE', remember: false });
+    if (isItems(u)) return okCreate();
+    if (u.endsWith('/api/')) return res(200, '', { 'Zotero-Server-ID': SID, 'X-Zotero-Version': version });
+  });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore() });
+  await w.authorize();
+  assert.equal(await w.serverId(), SID);
+  const rootCalls = () => f.calls.filter((c) => c.url.endsWith('/api/')).length;
+  const before = rootCalls();
+  await w.serverId();
+  assert.equal(rootCalls(), before); // cached
+  w.resetInfo();
+  version = '9.0.0';
+  await rejectsCode(w.serverId(), 'readonly'); // refetched
+  assert.equal(rootCalls(), before + 1);
+  w.resetInfo();
+  version = '10.0.1';
+  await w.createItems([{}]); // onceKey survived resetInfo
+  const used = f.calls.find((c) => isItems(c.url));
+  assert.equal(used.headers['Zotero-API-Key'], 'ONCE');
+});

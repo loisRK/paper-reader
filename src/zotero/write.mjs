@@ -184,6 +184,11 @@ export function createZoteroWriter(cfg, opts = {}) {
   return {
     serverId,
     authorize,
+    // Forget cached server info only (a long-lived writer must notice Zotero restarts/upgrades).
+    // The single-use onceKey is kept.
+    resetInfo() {
+      info = null;
+    },
     async createItems(items) {
       const res = await write('POST', '/api/users/0/items', { body: items });
       const out = await res.json();

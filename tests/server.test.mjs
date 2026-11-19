@@ -204,3 +204,166 @@ test('server entry point prints a one-line Korean error and exits 1 on bad confi
   assert.equal(r.stderr.trim().split('\n').length, 1);
   await fs.rm(cwd, { recursive: true, force: true });
 });
+
+// ---- notes / highlights routes (fake Zotero injected; never hits a real one) ----
+const rect = [[10, 10, 50, 20]];
+const nsource = {
+  id: 'n1',
+  zotero: { itemKey: 'ITEM0001', attachmentKey: 'ATT00001' },
+  meta: { title: 'N1' },
+  pages: [{ page: 1 }, { page: 2 }],
+  sentences: {
+    'n1-s1': { text: 'a', page: 1, rects: rect, pdfRects: rect },
+    'n1-s2': { text: 'b', page: 1, rects: rect, pdfRects: rect },
+    'n1-s10': { text: 'c', page: 1, rects: rect, pdfRects: rect },
+    'n1-s11': { text: 'd', page: 2, rects: rect, pdfRects: rect },
+    'n1-s12': { text: 'e', page: 2 },
+  },
+};
+
+async function notesServer(t, extra = {}) {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-notes-'));
+  const ex = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-notes-ex-'));
+  for (const [root, id, src] of [[d, 'n1', nsource], [ex, 'exa', { ...nsource, id: 'exa' }]]) {
+    await fs.mkdir(path.join(root, id));
+    await fs.writeFile(path.join(root, id, 'source.json'), JSON.stringify(src));
+  }
+  await fs.writeFile(path.join(d, 'n1', 'digest.json'), JSON.stringify({ ...digest, paperId: 'n1', takeaway: { text: 't', evidence: ['n1-s1'], why: 'w' }, cards: [{ id: 'c1', section: 'motivation', question: 'q', answer: 'a', bridge: '', items: [] }] }));
+  const zcalls = { info: 0, reset: 0, authorize: 0 };
+  const zotero = {
+    getServerInfo: async () => { zcalls.info += 1; return { running: false, serverId: null, version: null, writable: false }; },
+    writer: {
+      resetInfo: () => { zcalls.reset += 1; },
+      authorize: async () => { zcalls.authorize += 1; if (extra.authorizeError) throw Object.assign(new Error('x'), { code: extra.authorizeError }); return { remember: true }; },
+    },
+  };
+  const s = createServer({ outputDir: d, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: ex, zotero });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  const b = `http://127.0.0.1:${s.address().port}`;
+  t.after(async () => { s.close(); await fs.rm(d, { recursive: true, force: true }); await fs.rm(ex, { recursive: true, force: true }); });
+  const req = (method, p, body) => fetch(b + p, { method, headers: body === undefined ? {} : { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
+  return { b, req, zcalls, dir: d, server: s };
+}
+
+test('GET notes returns status and runs sync once', async (t) => {
+  const { req, zcalls } = await notesServer(t);
+  const r = await req('GET', '/api/papers/n1/notes');
+  assert.equal(r.status, 200);
+  const body = await r.json();
+  assert.deepEqual(body.highlights, []);
+  assert.deepEqual(body.cardMemos, {});
+  assert.deepEqual(body.zoteroAnnotations, []);
+  assert.equal(body.status, 'offline');
+  assert.equal(body.pending, 0);
+  assert.equal(body.needsReextract, true);
+  assert.ok('pending' in body && 'message' in body && 'note' in body);
+  assert.equal(zcalls.info, 1);
+  assert.equal(zcalls.reset, 1);
+  assert.equal((await req('GET', '/api/papers/nope/notes')).status, 404);
+  assert.equal((await req('GET', '/api/papers/..%2Fx/notes')).status, 400);
+});
+
+test('POST highlights validates sentenceIds exist and color is a Zotero color', async (t) => {
+  const { req } = await notesServer(t);
+  const url = '/api/papers/n1/highlights';
+  assert.equal((await req('POST', url, { sentenceIds: [] })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: 'n1-s1' })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: ['zzz'] })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: Array.from({ length: 21 }, () => 'n1-s1') })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: ['n1-s1'], color: '#123456' })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: ['n1-s1'], comment: 'x'.repeat(2001) })).status, 400);
+  assert.equal((await req('POST', url, { sentenceIds: ['n1-s1'], comment: 5 })).status, 400);
+  const ok = await req('POST', url, { sentenceIds: ['n1-s10', 'n1-s2', 'n1-s1', 'n1-s2'], color: '#ff6666', comment: 'hi' });
+  assert.equal(ok.status, 201);
+  const h = await ok.json();
+  assert.deepEqual(h.sentenceIds, ['n1-s1', 'n1-s2', 'n1-s10']); // document order, deduped
+  assert.equal(h.color, '#ff6666');
+  const notes = await (await req('GET', '/api/papers/n1/notes')).json();
+  assert.equal(notes.highlights.length, 1);
+});
+
+test('POST highlights pre-validates against Zotero conversion (409 re-extract / 400 multi-page)', async (t) => {
+  const { req, dir } = await notesServer(t);
+  const url = '/api/papers/n1/highlights';
+  const multi = await req('POST', url, { sentenceIds: ['n1-s1', 'n1-s11'] });
+  assert.equal(multi.status, 400);
+  assert.match((await multi.json()).error, /한 페이지/);
+  const re = await req('POST', url, { sentenceIds: ['n1-s12'] });
+  assert.equal(re.status, 409);
+  assert.equal((await re.json()).error, '원문을 다시 추출해야 Zotero에 보낼 수 있습니다: npm run extract -- n1');
+  await assert.rejects(fs.access(path.join(dir, 'n1', 'notes.json'))); // nothing stored
+});
+
+test('POST highlights on example paper → 403', async (t) => {
+  const { req } = await notesServer(t);
+  const r = await req('POST', '/api/papers/exa/highlights', { sentenceIds: ['exa-s1'] });
+  assert.equal(r.status, 403);
+  assert.equal((await r.json()).error, '예제 논문에는 메모를 저장하지 않습니다.');
+  assert.equal((await req('PUT', '/api/papers/exa/card-memos/c1', { text: 'x' })).status, 403);
+  assert.equal((await req('POST', '/api/papers/exa/note-conflict', { choice: 'overwrite' })).status, 403);
+});
+
+test('PUT/DELETE highlight, unknown hid → 404', async (t) => {
+  const { req } = await notesServer(t);
+  const h = await (await req('POST', '/api/papers/n1/highlights', { sentenceIds: ['n1-s1'] })).json();
+  const up = await req('PUT', `/api/papers/n1/highlights/${h.id}`, { color: '#5fb236', comment: 'c' });
+  assert.equal(up.status, 200);
+  assert.equal((await up.json()).comment, 'c');
+  assert.equal((await req('PUT', `/api/papers/n1/highlights/${h.id}`, { color: 'red' })).status, 400);
+  assert.equal((await req('PUT', '/api/papers/n1/highlights/h-nope', { comment: 'c' })).status, 404);
+  assert.equal((await req('DELETE', '/api/papers/n1/highlights/h-nope')).status, 404);
+  assert.equal((await req('DELETE', `/api/papers/n1/highlights/${h.id}`)).status, 204);
+  assert.equal((await (await req('GET', '/api/papers/n1/notes')).json()).highlights.length, 0);
+});
+
+test('DELETE without allowed Host → 403', async (t) => {
+  const { server } = await notesServer(t);
+  const { default: http } = await import('node:http');
+  const status = await new Promise((resolve, reject) => {
+    http.request({ host: '127.0.0.1', port: server.address().port, path: '/api/papers/n1/highlights/h-x', method: 'DELETE', headers: { Host: 'evil.example' } }, (r) => { r.resume(); resolve(r.statusCode); }).on('error', reject).end();
+  });
+  assert.equal(status, 403);
+});
+
+test('PUT card memo then GET notes shows it; empty deletes; too long 400', async (t) => {
+  const { req } = await notesServer(t);
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: '메모' })).status, 200);
+  assert.deepEqual((await (await req('GET', '/api/papers/n1/notes')).json()).cardMemos, { c1: '메모' });
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: '' })).status, 200);
+  assert.deepEqual((await (await req('GET', '/api/papers/n1/notes')).json()).cardMemos, {});
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: 'x'.repeat(5001) })).status, 400);
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: 3 })).status, 400);
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/bad%20id!', { text: 'x' })).status, 400);
+});
+
+test('note-conflict resolves; invalid choice 400', async (t) => {
+  const { req } = await notesServer(t);
+  const r = await req('POST', '/api/papers/n1/note-conflict', { choice: 'keep-zotero' });
+  assert.equal(r.status, 200);
+  assert.deepEqual(await r.json(), { ok: true });
+  assert.equal((await req('POST', '/api/papers/n1/note-conflict', { choice: 'x' })).status, 400);
+});
+
+test('POST /api/zotero/authorize maps outcomes to 200 JSON', async (t) => {
+  const a = await notesServer(t);
+  assert.deepEqual(await (await a.req('POST', '/api/zotero/authorize', {})).json(), { ok: true, remember: true });
+  const d = await notesServer(t, { authorizeError: 'denied' });
+  const dr = await d.req('POST', '/api/zotero/authorize', {});
+  assert.equal(dr.status, 200);
+  assert.deepEqual(await dr.json(), { ok: false, status: 'denied' });
+  const u = await notesServer(t, { authorizeError: 'weird' });
+  assert.deepEqual(await (await u.req('POST', '/api/zotero/authorize', {})).json(), { ok: false, status: 'offline' });
+});
+
+test('paper endpoint and readPaper expose needsReextract', async (t) => {
+  const { req } = await notesServer(t);
+  assert.equal((await (await req('GET', '/api/papers/n1')).json()).needsReextract, true);
+  const { readPaper } = await import('../src/reader/store.mjs');
+  const ok = { ...nsource, sentences: { a: nsource.sentences['n1-s1'] } };
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-re-'));
+  t.after(() => fs.rm(d, { recursive: true, force: true }));
+  await fs.mkdir(path.join(d, 'q'));
+  await fs.writeFile(path.join(d, 'q', 'source.json'), JSON.stringify(ok));
+  assert.equal((await readPaper(d, 'q', { examplesDir: null })).needsReextract, false);
+  assert.equal((await readPaper(path.join(d, 'none'), 'n1', { examplesDir: null })), null);
+});
