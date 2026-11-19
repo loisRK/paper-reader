@@ -1,0 +1,117 @@
+import { test } from 'node:test';
+import assert from 'node:assert/strict';
+import fs from 'node:fs/promises';
+import os from 'node:os';
+import path from 'node:path';
+import { main, VENV_INSTALL_COMMAND } from '../src/digest/extract-cli.mjs';
+
+const resolved = {
+  id: 'kim2025reader',
+  itemKey: 'H9RA4VSE',
+  attachmentKey: 'IG8JQQUI',
+  pdfPath: '/Users/x/Zotero/storage/IG8JQQUI/논문 파일.pdf',
+  meta: { title: 'A Reader Paper', authors: ['Kim A'], journal: 'J', date: '2025', doi: '10.1/x' },
+};
+const extracted = {
+  extractorVersion: 1,
+  pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }],
+  blocks: [{ id: 'b1', type: 'caption', page: 1, sentenceIds: ['p1-s1', 'p1-s2'] }],
+  sentences: {
+    'p1-s1': { text: 'Figure 1. A.', page: 1, block: 'b1', rects: [] },
+    'p1-s2': { text: 'More.', page: 1, block: 'b1', rects: [] },
+  },
+  figures: [{ label: 'Figure 1', page: 1, captionSentenceId: 'p1-s1' }],
+};
+
+async function setup() {
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'extract-cli-'));
+  const python = path.join(dir, 'python');
+  await fs.writeFile(python, '');
+  const logs = [];
+  const errors = [];
+  return {
+    dir,
+    logs,
+    errors,
+    opts: {
+      cfg: { outputDir: path.join(dir, 'out') },
+      pythonPath: python,
+      log: (m) => logs.push(m),
+      error: (m) => errors.push(m),
+    },
+  };
+}
+
+test('merges id, zotero keys and meta into <outputDir>/<id>/source.json', async () => {
+  const { dir, logs, opts } = await setup();
+  const calls = [];
+  const code = await main(['H9RA4VSE'], {
+    ...opts,
+    resolveItem: async (idOrKey, cfg) => (calls.push({ idOrKey, cfg }), resolved),
+    runPython: async (python, args) => {
+      calls.push({ python, args });
+      await fs.writeFile(args[2], JSON.stringify(extracted));
+      return { code: 0, stderr: '' };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(calls[0].idOrKey, 'H9RA4VSE');
+  assert.equal(calls[1].python, opts.pythonPath);
+  assert.match(calls[1].args[0], /extract[/\\]extract_pdf\.py$/);
+  assert.equal(calls[1].args[1], resolved.pdfPath);
+
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'out', 'kim2025reader', 'source.json'), 'utf8'));
+  assert.equal(saved.id, 'kim2025reader');
+  assert.deepEqual(saved.zotero, { itemKey: 'H9RA4VSE', attachmentKey: 'IG8JQQUI' });
+  assert.equal(saved.meta.title, 'A Reader Paper');
+  assert.deepEqual(Object.keys(saved), ['extractorVersion', 'id', 'zotero', 'meta', 'pages', 'blocks', 'sentences', 'figures']);
+  assert.deepEqual(saved.sentences, extracted.sentences);
+
+  const out = logs.join('\n');
+  assert.match(out, /문장 2개/);
+  assert.match(out, /페이지 2쪽/);
+  assert.match(out, /그림·표 1개/);
+  assert.ok(out.includes("이제 AI 도구에게 'prompts/digest.md 규칙으로 kim2025reader 요약을 써줘'라고 요청하세요."));
+  await assert.rejects(fs.access(calls[1].args[2]), 'temp file is cleaned up');
+});
+
+test('missing .venv prints install command and exits 1', async () => {
+  const { dir, errors, opts } = await setup();
+  let resolvedCalled = false;
+  const code = await main(['H9RA4VSE'], {
+    ...opts,
+    pythonPath: path.join(dir, 'no-venv', 'bin', 'python'),
+    resolveItem: async () => { resolvedCalled = true; return resolved; },
+    runPython: async () => assert.fail('must not run python'),
+  });
+  assert.equal(code, 1);
+  assert.equal(resolvedCalled, false);
+  assert.ok(errors.join('\n').includes(VENV_INSTALL_COMMAND));
+  assert.equal(VENV_INSTALL_COMMAND, 'python3 -m venv .venv && .venv/bin/pip install -r extract/requirements.txt');
+});
+
+test('python exit 2 prints its stderr and exits 1 without writing', async () => {
+  const { dir, errors, opts } = await setup();
+  const msg = '텍스트를 추출할 수 없습니다(스캔 PDF로 보입니다). OCR된 PDF로 바꿔주세요.';
+  const code = await main(['H9RA4VSE'], {
+    ...opts,
+    resolveItem: async () => resolved,
+    runPython: async () => ({ code: 2, stderr: `${msg}\n` }),
+  });
+  assert.equal(code, 1);
+  assert.ok(errors.join('\n').includes(msg));
+  await assert.rejects(fs.access(path.join(dir, 'out', 'kim2025reader', 'source.json')));
+});
+
+test('resolveItem failure and missing argument exit 1', async () => {
+  const { errors, opts } = await setup();
+  const code = await main(['NOPE'], {
+    ...opts,
+    resolveItem: async () => { throw new Error("Zotero에서 'NOPE' 항목을 찾지 못했습니다."); },
+    runPython: async () => assert.fail('must not run python'),
+  });
+  assert.equal(code, 1);
+  assert.ok(errors.join('\n').includes("'NOPE' 항목을 찾지 못했습니다"));
+  assert.equal(await main([], opts), 1);
+  assert.match(errors.at(-1), /사용법: npm run extract -- <citekey\|itemKey>/);
+});
