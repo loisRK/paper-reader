@@ -49,6 +49,21 @@ export function sentenceMarks(notes) {
   return map;
 }
 
+export const emptyNotes = () => ({
+  highlights: [], cardMemos: {}, zoteroAnnotations: [], note: null,
+  status: 'readonly', pending: 0, message: null, needsReextract: false,
+});
+
+// Wraps an async fn so a second call while one is running is ignored (returns undefined).
+export function singleFlight(fn) {
+  let busy = false;
+  return async (...args) => {
+    if (busy) return undefined;
+    busy = true;
+    try { return await fn(...args); } finally { busy = false; }
+  };
+}
+
 export function statusText(status, pending) {
   switch (status) {
     case 'connected': return 'Zotero 연결됨';
@@ -86,7 +101,7 @@ export function setupNotes({ id, source, panel, actions }) {
   for (const b of source.blocks ?? []) {
     for (const sid of b.sentenceIds ?? []) { order.push(sid); pageOf.set(sid, b.page); }
   }
-  const s = { notes: null, lastJson: null, color: DEFAULT_COLOR, popover: null, pop: null, sel: null, disposed: false };
+  const s = { notes: emptyNotes(), lastJson: null, color: DEFAULT_COLOR, popover: null, pop: null, sel: null, disposed: false };
   const statusNode = el('div', { class: 'notes-status', role: 'status' });
   const toolbar = el('div', { class: 'sel-toolbar', role: 'toolbar', 'aria-label': '선택한 문장 메모', hidden: true });
   document.body.append(toolbar);
@@ -96,7 +111,7 @@ export function setupNotes({ id, source, panel, actions }) {
   // ----- status badge -----
   function renderStatus() {
     const n = s.notes;
-    if (!n) { statusNode.replaceChildren(); return; }
+    if (!s.lastJson) { statusNode.replaceChildren(); return; }
     const needsAuth = n.status === 'needs-auth' || n.status === 'denied';
     statusNode.className = `notes-status st-${n.status}`;
     statusNode.replaceChildren(
@@ -168,7 +183,10 @@ export function setupNotes({ id, source, panel, actions }) {
     renderMarks();
   }
 
+  const sentEl = (sid) => panel.querySelector(`[data-sid="${CSS.escape(sid)}"]`);
+
   function openPopover(sid, anchor, focusText = false) {
+    if (s.disposed) return;
     closePopover();
     const marks = (sentenceMarks(s.notes).get(sid) ?? []);
     const parts = [];
@@ -207,7 +225,7 @@ export function setupNotes({ id, source, panel, actions }) {
           ? 'Zotero에서 바뀌어 삭제하지 않았습니다.'
           : `Zotero에서 바뀌었습니다. 내가 쓴 내용: ${conflict.mine?.comment ?? ''}` }),
         el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '충돌 안내 닫기',
-          onclick: async () => { if (await put({ color: h.color, comment: h.comment ?? '' })) openPopover(s.popover, s.pop, false); } })) : null,
+          onclick: async () => { const sid = s.popover; if (await put({ color: h.color, comment: h.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); } })) : null,
       area,
       swatches(h.color, async (color) => { if (await put({ color })) h.color = color; }),
       el('div', { class: 'pop-actions' },
@@ -240,17 +258,18 @@ export function setupNotes({ id, source, panel, actions }) {
     return { ids, rect: rects[rects.length - 1] ?? range.getBoundingClientRect(), pages: new Set(ids.map((x) => pageOf.get(x))) };
   }
 
-  async function create(withMemo) {
+  const create = singleFlight(async (withMemo) => {
     const sel = s.sel;
     if (!sel) return;
     try {
       const rec = await actions.addHighlight(id, { sentenceIds: sel.ids, color: s.color });
+      if (s.disposed) return;
       document.getSelection()?.removeAllRanges();
       hideToolbar();
       replaceHighlight(rec);
-      if (withMemo) openPopover(rec.sentenceIds[0], panel.querySelector(`[data-sid="${CSS.escape(rec.sentenceIds[0])}"]`) ?? panel, true);
-    } catch (e) { fail(e); }
-  }
+      if (withMemo) openPopover(rec.sentenceIds[0], sentEl(rec.sentenceIds[0]) ?? panel, true);
+    } catch (e) { if (!s.disposed) fail(e); }
+  });
 
   function hideToolbar() { toolbar.hidden = true; s.sel = null; }
 
@@ -288,7 +307,7 @@ export function setupNotes({ id, source, panel, actions }) {
   };
   const onDocKey = (e) => {
     if (e.key === 'Escape' && s.pop) { closePopover(); return; }
-    if (e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target) || !s.sel || s.notes?.needsReextract || s.sel.pages.size > 1) return;
+    if (e.repeat || e.ctrlKey || e.metaKey || e.altKey || isTyping(e.target) || !s.sel || s.notes?.needsReextract || s.sel.pages.size > 1) return;
     if (e.key === 'h') { e.preventDefault(); create(false); } else if (e.key === 'm') { e.preventDefault(); create(true); }
   };
   const onDocDown = (e) => {

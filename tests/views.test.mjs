@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -116,4 +116,23 @@ test('statusText: per status', () => {
 
 test('NOTE_COLORS matches ZOTERO_COLORS (source of truth)', () => {
   assert.deepEqual(Object.fromEntries(NOTE_COLORS.map((c) => [c.name, c.value])), ZOTERO_COLORS);
+});
+
+test('emptyNotes: usable before first poll', () => {
+  const n = emptyNotes();
+  assert.deepEqual([n.highlights, n.zoteroAnnotations], [[], []]);
+  assert.equal(sentenceMarks(n).size, 0);
+  assert.notEqual(emptyNotes().highlights, n.highlights);
+});
+
+test('singleFlight: ignores calls while running, allows again afterwards', async () => {
+  let calls = 0;
+  let release;
+  const f = singleFlight(() => { calls += 1; return new Promise((r) => { release = r; }); });
+  const first = f();
+  assert.equal(await f(), undefined);
+  assert.equal(calls, 1);
+  release(); await first;
+  const second = f(); release(); await second;
+  assert.equal(calls, 2);
 });
