@@ -84,7 +84,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction, pdfSelectionResult, pdfMarkLayers, pdfPointSentence } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction, pdfSelectionResult, pdfMarkLayers, pdfPointSentence, toolbarAction } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -499,4 +499,11 @@ test('pdfPointSentence: 클릭 점(화면) → PDF 좌표 → 표시된 문장�
   assert.equal(pdfPointSentence({ ...hit, sids: ['p1-s1'] }), null);
   assert.equal(pdfPointSentence({ ...hit, sids: [] }), null);
   assert.equal(pdfPointSentence({ ...hit, x: 100 + 500, sids: ['p1-s2'] }), null);
+});
+
+test('toolbarAction: 끄는 중 selectionchange는 숨김, 놓으면·키보드 선택은 그린다', () => {
+  assert.equal(toolbarAction({ dragging: true, trigger: 'selectionchange' }), 'hide');
+  assert.equal(toolbarAction({ dragging: false, trigger: 'selectionchange' }), 'render');
+  assert.equal(toolbarAction({ dragging: false, trigger: 'pointerup' }), 'render');
+  assert.equal(toolbarAction({ dragging: false, trigger: 'mouseup' }), 'render');
 });

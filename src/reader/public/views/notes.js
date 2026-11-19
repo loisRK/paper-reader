@@ -96,6 +96,15 @@ export function statusText(status, pending) {
 // The popover's textarea holds an edit that is not saved yet.
 export const needsCommentSave = (original, current) => typeof current === 'string' && current !== (original ?? '');
 
+// What a selection event does to the selection toolbar. While a pointer drag that began in the
+// source panel is in progress the toolbar stays hidden: drawn under the pointer, it would take the
+// selection's moving end (its buttons are in the DOM after every page) and select a whole page.
+// 'hide': selectionchange mid-drag. 'render': drag ended, or any other selection change (keyboard).
+export function toolbarAction({ dragging, trigger }) {
+  if (trigger === 'selectionchange' && dragging) return 'hide';
+  return 'render';
+}
+
 // What a mousedown does to an open popover.
 // 'keep': inside the popover (or nothing open). 'reopen': another marked sentence (its click opens it).
 // 'close': anywhere else — including unmarked text and the sentence whose popover is already open (toggle).
@@ -517,7 +526,21 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
 
   let raf = 0;
   const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderToolbar); };
-  const onSelChange = schedule;
+  let dragging = false;
+  const onSelChange = () => {
+    if (toolbarAction({ dragging, trigger: 'selectionchange' }) === 'hide') { cancelAnimationFrame(raf); hideToolbar(); return; }
+    schedule();
+  };
+  const onPanelPointerDown = (e) => {
+    if (e.button !== 0) return;
+    dragging = true;
+    cancelAnimationFrame(raf);
+  };
+  const onDragEnd = () => {
+    if (!dragging) return;
+    dragging = false;
+    if (toolbarAction({ dragging, trigger: 'pointerup' }) === 'render') schedule();
+  };
   // A mousedown that closed this sentence's popover must not reopen it on the following click.
   let toggledClosed = null;
   const onPanelClick = (e) => {
@@ -549,6 +572,10 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     closePopover();
   };
   document.addEventListener('selectionchange', onSelChange);
+  panel.addEventListener('pointerdown', onPanelPointerDown);
+  document.addEventListener('pointerup', onDragEnd);
+  document.addEventListener('pointercancel', onDragEnd);
+  window.addEventListener('blur', onDragEnd);
   panel.addEventListener('mouseup', schedule);
   panel.addEventListener('keyup', schedule);
   panel.addEventListener('click', onPanelClick);
@@ -591,6 +618,10 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
       poller.stop();
       cancelAnimationFrame(raf);
       document.removeEventListener('selectionchange', onSelChange);
+      panel.removeEventListener('pointerdown', onPanelPointerDown);
+      document.removeEventListener('pointerup', onDragEnd);
+      document.removeEventListener('pointercancel', onDragEnd);
+      window.removeEventListener('blur', onDragEnd);
       document.removeEventListener('keydown', onDocKey);
       document.removeEventListener('mousedown', onDocDown);
       document.removeEventListener('visibilitychange', onVis);
