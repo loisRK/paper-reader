@@ -17,7 +17,7 @@
 |---|---|---|
 | Node.js | 22 이상 | 검색·검증·읽기 앱 |
 | Python | 3.10 이상 | PDF 추출(PyMuPDF) |
-| Zotero | 7 이상 | 논문 등록·PDF 보관 (Zotero에 메모를 쓰는 기능은 다음 단계(메모 연동·Obsidian 정리)에서 지원하며 Zotero 10 이상 필요) |
+| Zotero | 7 이상 (메모를 Zotero로 보내려면 10 이상) | 논문 등록·PDF 보관, 메모 동기화 |
 | AI 코딩 도구 | Claude Code, Codex 등 | 검색 결과 한 줄 요약, 논문 요약 작성 |
 | 운영체제 | macOS, Linux | Windows는 지원하지 않습니다(추출기가 `.venv/bin/python` 경로를 씁니다) |
 
@@ -51,6 +51,7 @@ cp paper-reader.config.example.json paper-reader.config.json
 | `search.monthsBack` / `perTrend` / `emergingWindowMonths` / `topJournals` | 24 / 5 / 6 / 5 | 검색 기간, 트렌드별 편수, 새 주제 기간(개월), 저널 수 |
 | `metrics.sjrCsv` | `./data/scimagojr.csv` | SCImago(SJR) CSV 경로 |
 | `metrics.mjlCsv` | `null` | Clarivate Master Journal List CSV 경로 |
+| `zotero.authFile` | `./data/zotero-auth.json` | Zotero 쓰기 허용 키 저장 위치 (git에 올라가지 않음) |
 | `researchContextFile` | `null` | (선택) 내 연구 주제를 적은 Markdown. 있으면 요약에 "내 연구와의 연결"이 추가됩니다 |
 
 ### OpenAlex API 키 (권장)
@@ -101,10 +102,50 @@ npm run reader                                # 읽기 앱: http://127.0.0.1:517
 
 설치 직후 `npm run reader`를 실행하면 목록에 **"예제"** 배지가 붙은 공개 논문 1편이 보입니다. CC BY 4.0 라이선스 논문으로 만든 `source.json`·`digest.json`이 [`examples/`](examples/)에 들어 있습니다(출처·라이선스는 각 예제 폴더의 README 참고). 예제의 읽기 진행률은 `outputDir`에 저장되며 저장소 파일은 바뀌지 않습니다.
 
+## Zotero에 메모 보내기
+
+읽다가 남긴 하이라이트와 메모를 Zotero PDF에 그대로 보냅니다. **Zotero 10 이상**이 필요합니다. Zotero 7~9에서는 Zotero의 메모를 읽기만 하고, 내 메모는 이 컴퓨터에만 저장됩니다(`Zotero 10 이상에서만 메모를 Zotero로 보낼 수 있습니다. 메모는 이 컴퓨터에 저장됩니다.`).
+
+### 처음 한 번: 쓰기 허용
+
+1. 읽기 앱에서 **`Zotero 쓰기 허용`** 버튼을 누릅니다.
+2. Zotero에 허용 창이 뜨면 **"Always Allow(항상 허용)"**를 고릅니다. "Allow"만 고르면 다음 쓰기 때 Zotero가 다시 묻습니다.
+3. 허용을 취소하려면 Zotero **설정 → 고급 → "Clear Write Authorizations"**를 누르세요.
+
+허용 키는 `data/zotero-auth.json`(git에 올라가지 않음, 파일 권한 600)에 저장됩니다. 위치는 설정의 `zotero.authFile`로 바꿀 수 있습니다.
+
+### 쓰는 법
+
+| 하고 싶은 일 | 방법 |
+|---|---|
+| 문장 하이라이트 | **원문** 패널에서 문장을 드래그 → `🖍 하이라이트` (키보드 `h`) |
+| 하이라이트 + 메모 | 드래그 → `📝 메모` (키보드 `m`) |
+| 색 고르기 | 8가지 색 중 선택 |
+| 카드별 내 생각 | 카드의 `📝 내 메모` (10분 모드에서만 보입니다) |
+| Zotero에서 만든 주석 보기 | 원문에 점선 밑줄 + 🟡로 표시 |
+
+- 카드 메모는 Zotero 논문 아래 **`Paper Reader 메모`** 노트 하나에 모입니다.
+- Zotero에서 고친 내용은 약 5초마다 읽기 앱에 반영됩니다.
+
+### 안전장치
+
+- 읽기 앱은 **자신이 만든 항목(태그 `paper-reader`)만** 고치거나 지웁니다. 내가 Zotero에서 직접 만든 주석은 건드리지 않습니다.
+- Zotero가 꺼져 있어도 메모는 이 컴퓨터(`<outputDir>/<id>/notes.json`, 보낼 목록 `pending.json`)에 저장되고, 화면에 `Zotero 연결 대기 중`으로 표시됩니다. Zotero를 켜면 자동으로 전송됩니다.
+- 같은 항목을 양쪽에서 고쳤다면 **Zotero 내용이 우선**이며, 읽기 앱에는 내가 쓴 내용이 함께 표시됩니다. 노트는 충돌 안내가 뜨고 `내 메모로 덮어쓰기` / `Zotero 내용 유지` 중에 고릅니다.
+- **예제 논문**에는 메모를 저장하지 않습니다.
+
+### 예전에 추출한 논문
+
+Zotero 하이라이트에는 PDF 위치(좌표)가 필요합니다. 이전에 추출한 논문은 한 번만 다시 추출하세요. 요약(`digest.json`)의 문장 ID는 그대로입니다.
+
+```bash
+npm run extract -- <citekey|itemKey>
+```
+
 ## 저작권과 커밋되지 않는 것
 
 - 여러분이 만든 산출물(`digests/` 등 `outputDir`의 `source.json`·`digest.json`·검색 결과)에는 논문 원문 텍스트가 들어 있으므로 **git에 커밋되지 않습니다**(`.gitignore`). 공유하기 전에 각 논문의 라이선스를 확인하세요.
-- `paper-reader.config.json`(API 키), `data/`(지표 CSV), `.venv/`도 커밋되지 않습니다.
+- `paper-reader.config.json`(API 키), `data/`(지표 CSV·Zotero 허용 키), `.venv/`도 커밋되지 않습니다.
 - 저장소에 포함된 예제는 CC BY 논문만 사용하며, 출처를 표시합니다.
 
 ## 개발
@@ -114,9 +155,11 @@ npm test          # Node 테스트 (node --test)
 npm run test:py   # Python 추출기 테스트 (pytest)
 ```
 
-## 1단계의 한계
+## 한계
 
-- 요약 메모를 Zotero에 되돌려 쓰는 **메모 동기화**와 **Obsidian 내보내기**는 다음 단계에서 지원합니다.
+- **Obsidian 내보내기**는 다음 단계에서 지원합니다.
+- 하이라이트는 문장 단위입니다(단어 일부만 칠할 수 없음). 한 번에 한 페이지 안에서만 만들 수 있습니다.
+- 메모를 Zotero로 보내려면 Zotero 10 이상이 필요하고, 실시간 반영은 Zotero가 실행 중일 때만 됩니다.
 - PDF 추출은 블록·단·페이지 경계를 넘는 문장을 나눠 저장하고, 그림 안 텍스트가 본문 문장으로 섞일 수 있습니다. 스캔본(PDF 이미지)은 지원하지 않습니다.
 - 검색 지표(SJR·MJL)는 사용자가 받은 파일에 의존하며, 확인하지 못한 값은 "미확인"으로 둡니다.
 
