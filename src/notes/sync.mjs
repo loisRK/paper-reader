@@ -3,6 +3,7 @@
 // pending op는 그대로 남는다. 내 태그(isMine)가 있고 key가 notes.json에 있는 항목만 고치거나 지운다.
 // 304 캐시는 notes.libraryVersion.{annotations, note} 목록별로 따로 두며, 이번 동기화에서
 // 우리가 쓴 것이 있으면 캐시를 믿지 않고 전체를 다시 받는다(우리 쓰기가 버전을 올렸으므로).
+import crypto from 'node:crypto';
 import { readNotes, writeNotes, readPending, writePending, withPaper, enqueue } from './store.mjs';
 import { toZoteroAnnotation, matchSentences, isMine, TAG } from '../zotero/annotations.mjs';
 
@@ -32,6 +33,11 @@ export function noteHtml(cards, cardMemos) {
   });
   return html;
 }
+
+// note.sentHash: hash of the note HTML Zotero last had from us (detects edits made elsewhere).
+// Zotero's note editor may wrap the HTML in <div data-schema-version="N">…</div>.
+const unwrapNote = (html) => String(html ?? '').replace(/^<div data-schema-version="[^"]*">([\s\S]*)<\/div>$/, '$1');
+const hashNote = (html) => crypto.createHash('sha256').update(unwrapNote(html)).digest('hex');
 
 const dataOf = (item) => item?.data ?? item ?? {};
 const keyOf = (item) => item?.key ?? item?.data?.key;
@@ -63,21 +69,6 @@ function zoteroEntry(item, source) {
     key: keyOf(item), page, sentenceIds,
     text: d.annotationText ?? '', comment: d.annotationComment ?? '', color: d.annotationColor ?? '',
   };
-}
-
-function resetForNewServer(notes, pending, serverId) {
-  for (const h of notes.highlights) {
-    h.zoteroKey = null;
-    h.zoteroVersion = null;
-  }
-  notes.serverId = serverId;
-  notes.note = { zoteroKey: null, zoteroVersion: null };
-  notes.libraryVersion = { annotations: null, note: null };
-  notes.zoteroAnnotations = [];
-  notes.tombstones = []; // old library's items: never deleted from the new one
-  pending.ops = [];
-  for (const h of notes.highlights) enqueue(pending, 'upsert-highlight', h.id);
-  if (Object.values(notes.cardMemos).some((t) => typeof t === 'string' && t.trim())) enqueue(pending, 'upsert-note');
 }
 
 function makeSync(ctx) {
@@ -220,6 +211,7 @@ function makeSync(ctx) {
         }
         try {
           n.zoteroVersion = await patch(n.zoteroKey, n.zoteroVersion, { note: html });
+          n.sentHash = hashNote(html);
         } catch (err) {
           if (!is412(err)) throw err;
           const fresh = await writer.getItem(n.zoteroKey);
@@ -234,7 +226,76 @@ function makeSync(ctx) {
     const { key, version } = await create({
       itemType: 'note', parentItem: itemKey, note: html, tags: [{ tag: TAG }],
     });
-    notes.note = { zoteroKey: key, zoteroVersion: version };
+    notes.note = { zoteroKey: key, zoteroVersion: version, sentHash: hashNote(html) };
+  }
+
+  // Server id changed. Two computers syncing one library share item keys, so look each stored
+  // key up on the new server: there and mine → keep the key, adopt its version (and values, as
+  // a pull would); missing → clear the key and queue a create. All lookups run before anything
+  // changes, so a failed lookup leaves notes untouched (retried next sync). Never patches or
+  // deletes with the old server's versions.
+  async function adoptServer(serverId) {
+    const lookup = async (key) => (key ? writer.getItem(key) : null);
+    const hs = [];
+    for (const h of notes.highlights) if (h.zoteroKey) hs.push([h, await lookup(h.zoteroKey)]);
+    const ts = [];
+    for (const t of notes.tombstones) ts.push([t, await lookup(t.zoteroKey)]);
+    const noteItem = await lookup(notes.note.zoteroKey);
+
+    const queued = new Set(pending.ops.filter((o) => o.op === 'upsert-highlight').map((o) => o.id));
+    for (const [h, item] of hs) {
+      if (!item) {
+        h.zoteroKey = null;
+        h.zoteroVersion = null;
+        delete h.sent;
+        enqueue(pending, 'upsert-highlight', h.id);
+        continue;
+      }
+      if (!isMine(item)) { h.zoteroVersion = versionOf(item); continue; } // untagged: flush/pull rules apply
+      const d = dataOf(item);
+      const z = { comment: d.annotationComment ?? '', color: d.annotationColor || h.color };
+      const sameAsSent = h.sent && z.comment === h.sent.comment && z.color === h.sent.color;
+      if (sameAsSent || (z.comment === h.comment && z.color === h.color)) {
+        h.zoteroVersion = versionOf(item); // unchanged in Zotero: a queued edit patches normally
+        h.sent = z;
+      } else if (queued.has(h.id) || unsent(h)) {
+        takeZotero(h, item); // both sides changed: Zotero wins, mine shown
+        dropOp(h.id);
+      } else {
+        h.comment = z.comment;
+        h.color = z.color;
+        h.zoteroVersion = versionOf(item);
+        markSent(h);
+      }
+    }
+    for (const [t, item] of ts) {
+      if (!item || !isMine(item)) {
+        notes.tombstones = notes.tombstones.filter((x) => x !== t);
+        pending.ops = pending.ops.filter((o) => !(o.op === 'delete-highlight' && o.id === t.id));
+        continue;
+      }
+      const d = dataOf(item);
+      const z = { comment: d.annotationComment ?? '', color: d.annotationColor || t.color };
+      const ref = t.sent ?? { comment: t.comment, color: t.color };
+      // Unchanged → delete with the new version; changed elsewhere → null forces the restore path.
+      t.zoteroVersion = z.comment === ref.comment && z.color === ref.color ? versionOf(item) : null;
+    }
+    const n = notes.note;
+    if (n.zoteroKey && !noteItem) {
+      notes.note = { zoteroKey: null, zoteroVersion: null };
+      if (Object.values(notes.cardMemos).some((t) => typeof t === 'string' && t.trim())) enqueue(pending, 'upsert-note');
+    } else if (noteItem) {
+      n.zoteroVersion = versionOf(noteItem);
+      if (isMine(noteItem)) {
+        const zh = hashNote(dataOf(noteItem).note);
+        if (zh === hashNote(noteHtml(cards, notes.cardMemos))) n.sentHash = zh;
+        else if (zh !== n.sentHash) n.conflict ??= { at: now() }; // edited elsewhere: like a pull
+      }
+    }
+    for (const o of pending.ops) { delete o.error; delete o.failedAt; }
+    notes.serverId = serverId;
+    notes.libraryVersion = { annotations: null, note: null };
+    notes.zoteroAnnotations = [];
   }
 
   const handlers = { 'upsert-highlight': upsertHighlight, 'delete-highlight': deleteHighlight, 'upsert-note': upsertNote };
@@ -324,7 +385,7 @@ function makeSync(ctx) {
     if (Number.isFinite(res.libraryVersion)) notes.libraryVersion.note = res.libraryVersion;
   }
 
-  return { flush, pullAnnotations, pullNote };
+  return { flush, pullAnnotations, pullNote, adoptServer };
 }
 
 async function runSync(outputDir, id, { source, cards, writer, serverInfo }) {
@@ -346,13 +407,18 @@ async function runSync(outputDir, id, { source, cards, writer, serverInfo }) {
       await writePending(outputDir, id, pending);
     },
   };
+  const sync = makeSync(ctx);
   if (serverInfo.serverId && notes.serverId !== serverInfo.serverId) {
-    if (notes.serverId) resetForNewServer(notes, pending, serverInfo.serverId);
-    else notes.serverId = serverInfo.serverId;
+    if (notes.serverId) {
+      try {
+        await sync.adoptServer(serverInfo.serverId);
+      } catch (err) {
+        return done(STATUS_BY_CODE[err?.code] ?? 'connected', `Zotero 서버 변경 확인 실패: ${err?.message ?? err}`);
+      }
+    } else notes.serverId = serverInfo.serverId;
     await ctx.save();
   }
 
-  const sync = makeSync(ctx);
   let status = 'readonly';
   let message = null;
   if (serverInfo.writable) {

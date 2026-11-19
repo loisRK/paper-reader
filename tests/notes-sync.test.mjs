@@ -602,6 +602,132 @@ test('server id changed → keys cleared, everything re-queued, nothing written 
   assert.equal(now.highlights[0].comment, 'a2');
 });
 
+// Same library synced to another computer: same item keys, different server id and versions.
+function syncedCopy(from, prefix = 'BBB') {
+  const w = fakeWriter(prefix);
+  for (let i = 0; i < 50; i++) w.bump();
+  for (const [k, it] of from.items) w.put(k, structuredClone(it.data));
+  w.serverId = async () => 'server-B';
+  return w;
+}
+const SERVER_B = { ...ONLINE, serverId: 'server-B' };
+
+test('server id changed, same keys on new server → adopt keys and versions, no create, no duplicate', async () => {
+  const dir = await tmp();
+  const a = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+  const b = await addHighlight(dir, ID, { sentenceIds: ['p1-s2'], color: '#ffd400', comment: 'b' });
+  const c = await addHighlight(dir, ID, { sentenceIds: ['p2-s1'], color: '#ffd400', comment: 'c' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w1 = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w1, serverInfo: ONLINE });
+  const old = await readNotes(dir, ID);
+  const keyOf = (hid) => old.highlights.find((h) => h.id === hid).zoteroKey;
+
+  const w2 = syncedCopy(w1);
+  // edited on the other computer (no local pending edit) → adopted silently
+  w2.items.get(keyOf(b.id)).data.annotationComment = 'b from other computer';
+  // local edits made before this sync
+  await updateHighlight(dir, ID, a.id, { comment: 'a2' });
+  await removeHighlight(dir, ID, c.id);
+  await setCardMemo(dir, ID, 'c2', 'second');
+
+  const r = await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  assert.equal(r.status, 'connected');
+  assert.equal(r.pending, 0);
+  assert.equal(w2.calls.filter((x) => x === 'createItems').length, 0, 'nothing recreated');
+  assert.equal(w2.items.size, 3, 'a, b and the note; c deleted');
+  const now = await readNotes(dir, ID);
+  assert.equal(now.serverId, 'server-B');
+  const ha = now.highlights.find((h) => h.id === a.id);
+  const hb = now.highlights.find((h) => h.id === b.id);
+  assert.equal(ha.zoteroKey, keyOf(a.id));
+  assert.equal(w2.items.get(ha.zoteroKey).data.annotationComment, 'a2', 'pending edit patched with the new version');
+  assert.equal(ha.zoteroVersion, w2.items.get(ha.zoteroKey).version);
+  assert.equal(hb.zoteroKey, keyOf(b.id));
+  assert.equal(hb.comment, 'b from other computer');
+  assert.equal(hb.conflict, null);
+  assert.equal(w2.items.has(keyOf(c.id)), false, 'local delete applied to the same item');
+  assert.equal(now.note.zoteroKey, old.note.zoteroKey);
+  assert.equal(w2.items.get(now.note.zoteroKey).data.note, noteHtml(cards, { c1: 'memo', c2: 'second' }));
+  assert.equal(w1.calls.filter((x) => ['patchItem', 'deleteItem'].includes(x)).length, 0);
+});
+
+test('server id changed: pending local edit vs different Zotero value → Zotero wins, mine kept in conflict', async () => {
+  const dir = await tmp();
+  const a = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w1 = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w1, serverInfo: ONLINE });
+  const old = await readNotes(dir, ID);
+  const w2 = syncedCopy(w1);
+  w2.items.get(old.highlights[0].zoteroKey).data.annotationComment = 'zotero side';
+  w2.items.get(old.note.zoteroKey).data.note = '<p>edited elsewhere</p>';
+  await updateHighlight(dir, ID, a.id, { comment: 'mine' });
+  await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  const now = await readNotes(dir, ID);
+  assert.equal(now.highlights[0].comment, 'zotero side');
+  assert.deepEqual(now.highlights[0].conflict.mine, { comment: 'mine', color: '#ffd400' });
+  assert.ok(now.note.conflict?.at, 'note content differs → conflict, not overwritten');
+  assert.equal(w2.items.get(old.note.zoteroKey).data.note, '<p>edited elsewhere</p>');
+  assert.equal(writes(w2).length, 0);
+});
+
+test('server id changed: missing keys on new server → keys cleared and recreated; present ones kept', async () => {
+  const dir = await tmp();
+  const a = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+  const b = await addHighlight(dir, ID, { sentenceIds: ['p1-s2'], color: '#ffd400', comment: 'b' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w1 = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w1, serverInfo: ONLINE });
+  const old = await readNotes(dir, ID);
+  const keyA = old.highlights.find((h) => h.id === a.id).zoteroKey;
+  const keyB = old.highlights.find((h) => h.id === b.id).zoteroKey;
+  const w2 = syncedCopy(w1);
+  w2.items.delete(keyB);
+  w2.items.delete(old.note.zoteroKey);
+  const r = await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  assert.equal(r.pending, 0);
+  const now = await readNotes(dir, ID);
+  assert.equal(now.highlights.find((h) => h.id === a.id).zoteroKey, keyA);
+  const nb = now.highlights.find((h) => h.id === b.id);
+  assert.ok(nb.zoteroKey && nb.zoteroKey !== keyB, 'recreated');
+  assert.equal(w2.items.get(nb.zoteroKey).data.annotationComment, 'b');
+  assert.ok(now.note.zoteroKey && now.note.zoteroKey !== old.note.zoteroKey);
+  assert.equal(w2.calls.filter((x) => x === 'createItems').length, 2);
+  assert.equal(w2.calls.filter((x) => ['patchItem', 'deleteItem'].includes(x)).length, 0);
+});
+
+test('server id changed: lookup fails → nothing adopted or written, retried next sync', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+  const w1 = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w1, serverInfo: ONLINE });
+  const w2 = syncedCopy(w1);
+  w2.fail.getItem = new ZoteroWriteError('offline', 'down');
+  const r = await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  assert.equal(r.status, 'offline');
+  assert.equal((await readNotes(dir, ID)).serverId, SID, 'still the old server: retried next time');
+  assert.equal(writes(w2).length, 0);
+  delete w2.fail.getItem;
+  await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  assert.equal((await readNotes(dir, ID)).serverId, 'server-B');
+  assert.equal(writes(w2).length, 0);
+});
+
+test('server id changed: permanently failed ops are retried', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+  const w1 = fakeWriter();
+  w1.rejectCreate = () => 'nope';
+  await syncPaper(dir, ID, { source, cards, writer: w1, serverInfo: ONLINE });
+  assert.ok((await readPending(dir, ID)).ops[0].error);
+  const w2 = syncedCopy(w1);
+  const r = await syncPaper(dir, ID, { source, cards, writer: w2, serverInfo: SERVER_B });
+  assert.equal(r.failed, 0);
+  assert.equal(r.pending, 0);
+  assert.ok((await readNotes(dir, ID)).highlights[0].zoteroKey);
+});
+
 test('readonly (Zotero 9) → no writes attempted, pull still works, memos kept', async () => {
   const dir = await tmp();
   await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'm' });

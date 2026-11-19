@@ -9,6 +9,13 @@
 //      설정돼 있는 동안 upsert-note op는 대기열에 남되 전송하지 않는다. resolveNoteConflict로 해제.
 //  - note.zoteroEdited: true  — 사용자가 'Zotero 내용 유지'를 고른 상태. 이후 카드 메모를 고쳐도
 //      노트를 덮어쓰지 않고 conflict를 다시 세운다. 'overwrite'만 이 표시를 지운다.
+//  - highlights[].sent: { comment, color } — Zotero가 마지막으로 가진 값(보냈거나 받아온 값).
+//      Zotero에서 지워졌을 때 보내지 않은 수정이 있는지, 서버가 바뀌었을 때 어느 쪽이 바뀌었는지 판단한다.
+//  - highlights[].conflict.zoteroDeleted: true — 보내지 않은 수정이 있는데 Zotero에서 지워졌거나
+//      태그가 빠진 하이라이트. key를 비우고 보관한다(자동으로 다시 만들지 않음).
+//  - note.sentHash: Zotero 노트에 마지막으로 보낸 HTML의 sha256.
+//  - pending op의 { error, failedAt }: Zotero가 영구적으로 거부한 op. 건너뛰고, 그 대상을 고치거나
+//      서버가 바뀌면 다시 시도한다.
 //  - tombstones: [하이라이트 레코드 사본]
 //      로컬에서 지웠지만 Zotero 삭제가 아직 안 된 하이라이트. delete-highlight op가 이것을 읽는다
 //      (지울 key가 notes.json에 남아 있어야만 Zotero 항목을 지운다). Zotero에서 그 사이 고쳐졌으면
