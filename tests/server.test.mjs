@@ -557,3 +557,25 @@ test('example papers report links.pdf false and never serve a PDF', async (t) =>
   assert.equal((await fetch(`${b}/api/papers/exp`).then((r) => r.json())).links.pdf, false);
   assert.equal((await fetch(`${b}/api/papers/exp/pdf`)).status, 404);
 });
+
+test('serves vendored pdf.js assets with correct MIME types', async () => {
+  const mjs = await fetch(`${base}/vendor/pdfjs/pdf.min.mjs`);
+  assert.equal(mjs.status, 200);
+  assert.equal(mjs.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  const worker = await fetch(`${base}/vendor/pdfjs/pdf.worker.min.mjs`);
+  assert.equal(worker.status, 200);
+  assert.equal(worker.headers.get('content-type'), 'text/javascript; charset=utf-8');
+  const css = await fetch(`${base}/vendor/pdfjs/pdf_viewer.css`);
+  assert.equal(css.status, 200);
+  assert.match(css.headers.get('content-type'), /^text\/css/);
+  const cmap = await fetch(`${base}/vendor/pdfjs/cmaps/Adobe-Korea1-UCS2.bcmap`);
+  assert.equal(cmap.status, 200);
+  assert.equal(cmap.headers.get('content-type'), 'application/octet-stream');
+  const pfb = await fetch(`${base}/vendor/pdfjs/standard_fonts/FoxitSerif.pfb`);
+  assert.equal(pfb.status, 200);
+  assert.equal(pfb.headers.get('content-type'), 'application/octet-stream');
+  const ver = await fetch(`${base}/vendor/pdfjs/VERSION`);
+  assert.equal(ver.status, 200);
+  assert.equal((await ver.text()).trim(), '6.5.438');
+  assert.equal((await fetch(`${base}/vendor/pdfjs/nope.bin`)).status, 404);
+});

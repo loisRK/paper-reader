@@ -13,6 +13,11 @@ const MAX_BODY = 1024 * 1024;
 const TYPES = {
   '.html': 'text/html; charset=utf-8',
   '.js': 'text/javascript; charset=utf-8',
+  '.mjs': 'text/javascript; charset=utf-8',
+  '.bcmap': 'application/octet-stream',
+  '.pfb': 'application/octet-stream',
+  '.ttf': 'font/ttf',
+  '.wasm': 'application/wasm',
   '.css': 'text/css; charset=utf-8',
   '.svg': 'image/svg+xml',
   '.json': 'application/json; charset=utf-8',
@@ -79,7 +84,8 @@ async function serveStatic(res, pathname) {
   if (rel.includes('\0')) throw new HttpError(400, '잘못된 경로입니다.');
   const file = path.resolve(PUBLIC_DIR, `.${rel}`);
   if (file !== PUBLIC_DIR && !file.startsWith(PUBLIC_DIR + path.sep)) throw new HttpError(404, '찾을 수 없습니다.');
-  const type = TYPES[path.extname(file)];
+  const base = path.basename(file);
+  const type = TYPES[path.extname(file)] ?? (/^(VERSION|LICENSE(_[A-Z0-9_]+)?)$/.test(base) ? 'text/plain; charset=utf-8' : undefined);
   if (!type) throw new HttpError(404, '찾을 수 없습니다.');
   let data;
   try {

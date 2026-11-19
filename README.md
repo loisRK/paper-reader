@@ -166,3 +166,5 @@ npm run test:py   # Python 추출기 테스트 (pytest)
 ## 라이선스
 
 [MIT](LICENSE)
+
+서드파티: PDF 보기에 [PDF.js](https://github.com/mozilla/pdf.js) 6.5.438(Apache-2.0, Mozilla)을 `src/reader/public/vendor/pdfjs/`에 포함합니다. 라이선스는 같은 폴더의 `LICENSE`를 참고하세요.
