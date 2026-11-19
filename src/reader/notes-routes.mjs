@@ -62,7 +62,7 @@ export function createNotesRoutes(cfg, { out, opts, fetchImpl, zotero }, helpers
 
   async function getNotes(id) {
     const b = await loadPaper(id);
-    let sync = { status: 'readonly', pending: 0, message: null, failed: 0, failedMessage: null };
+    let sync = { status: 'example', pending: 0, message: null, failed: 0, failedMessage: null };
     if (!b.example) {
       writer.resetInfo?.();
       const serverInfo = await getServerInfo(cfg);

@@ -296,6 +296,15 @@ test('POST highlights pre-validates against Zotero conversion (409 re-extract / 
   await assert.rejects(fs.access(path.join(dir, 'n1', 'notes.json'))); // nothing stored
 });
 
+test('GET notes on example paper → status example, no Zotero calls', async (t) => {
+  const { req, zcalls } = await notesServer(t);
+  const body = await (await req('GET', '/api/papers/exa/notes')).json();
+  assert.equal(body.status, 'example');
+  assert.equal(body.pending, 0);
+  assert.equal(body.message, null);
+  assert.equal(zcalls.info, 0);
+});
+
 test('POST highlights on example paper → 403', async (t) => {
   const { req } = await notesServer(t);
   const r = await req('POST', '/api/papers/exa/highlights', { sentenceIds: ['exa-s1'] });

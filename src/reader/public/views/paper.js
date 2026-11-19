@@ -351,7 +351,7 @@ export function render(container, data, actions) {
     })
     : null;
   notesCtl = actions.notes
-    ? setupNotes({ id: data.id, source, panel: source_, actions, onNotes: (n) => memos?.update(n) })
+    ? setupNotes({ id: data.id, source, panel: source_, actions, example: data.example === true, onNotes: (n) => memos?.update(n) })
     : null;
   const notesStatus = notesCtl?.statusNode ?? null;
 

@@ -19,6 +19,7 @@ const DEFAULT_COLOR = NOTE_COLORS[0].value;
 const POLL_MS = 5000;
 const READONLY_TEXT = 'Zotero 10 이상에서만 메모를 Zotero로 보낼 수 있습니다. 메모는 이 컴퓨터에 저장됩니다.';
 const MULTI_PAGE_TEXT = '한 번에 한 페이지 안에서만 표시할 수 있습니다.';
+const EXAMPLE_TEXT = '예제 논문에는 메모를 저장하지 않습니다.';
 
 // ---------- pure helpers ----------
 
@@ -71,6 +72,7 @@ export function statusText(status, pending) {
     case 'needs-auth':
     case 'denied': return 'Zotero 쓰기 허용이 필요합니다';
     case 'rate-limited': return 'Zotero 허용 요청이 많아 잠시 후 다시 시도합니다';
+    case 'example': return EXAMPLE_TEXT;
     default: return READONLY_TEXT;
   }
 }
@@ -107,8 +109,15 @@ function swatches(current, onPick) {
 }
 
 // source: extracted source (blocks, sentences); panel: the .source element.
-// Returns { statusNode, dispose }.
-export function setupNotes({ id, source, panel, actions, onNotes }) {
+// Returns { statusNode, refresh, dispose }.
+export function setupNotes({ id, source, panel, actions, onNotes, example = false }) {
+  // Example papers never store memos (writes are 403): one static line, no badge, no
+  // authorize button, no re-extract hint, no selection toolbar, no polling.
+  if (example) {
+    const statusNode = el('div', { class: 'notes-status st-example', role: 'status' },
+      el('span', { class: 'muted st-hint', text: statusText('example') }));
+    return { statusNode, refresh: async () => {}, dispose() {} };
+  }
   const order = [];
   const pageOf = new Map();
   for (const b of source.blocks ?? []) {
