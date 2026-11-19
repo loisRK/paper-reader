@@ -531,7 +531,10 @@ test('user-made Zotero annotation appears in zoteroAnnotations with matched sent
   assert.deepEqual(Object.keys(za).sort(), ['USER0001', 'USER0002', 'USER0003']);
   assert.deepEqual(za.USER0001, {
     key: 'USER0001', page: 1, sentenceIds: ['p1-s2'], text: 'Second one.', comment: 'user note', color: '#5fb236',
+    rects: [[50, 668, 200, 680]],
   });
+  assert.deepEqual(za.USER0003.rects, [[50, 688, 300, 700]]);
+  assert.deepEqual(za.USER0002.rects, [], 'ink has paths, not rects');
   assert.equal(za.USER0002.page, 2);
   assert.deepEqual(za.USER0002.sentenceIds, []);
   assert.deepEqual(za.USER0003.sentenceIds, [], 'note annotations are never matched to sentences');

@@ -60,6 +60,17 @@ function pageOf(annotationPosition) {
   }
 }
 
+function rectsOf(annotationPosition) {
+  try {
+    const pos = typeof annotationPosition === 'string' ? JSON.parse(annotationPosition) : annotationPosition;
+    return Array.isArray(pos?.rects)
+      ? pos.rects.filter((r) => Array.isArray(r) && r.length === 4 && r.every(Number.isFinite))
+      : [];
+  } catch {
+    return [];
+  }
+}
+
 function zoteroEntry(item, source) {
   const d = dataOf(item);
   const { page, sentenceIds } = TEXT_TYPES.has(d.annotationType)
@@ -68,6 +79,7 @@ function zoteroEntry(item, source) {
   return {
     key: keyOf(item), page, sentenceIds,
     text: d.annotationText ?? '', comment: d.annotationComment ?? '', color: d.annotationColor ?? '',
+    rects: rectsOf(d.annotationPosition),
   };
 }
 
