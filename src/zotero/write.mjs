@@ -207,10 +207,12 @@ export function createZoteroWriter(cfg, opts = {}) {
       if (!res.ok) throw new ZoteroWriteError('http', `Zotero 조회 실패: HTTP ${res.status}`, { status: res.status });
       return res.json();
     },
-    async listChildren(parentKey, sinceVersion) {
+    // Zotero's local API omits annotation children unless itemType=annotation is requested.
+    async listChildren(parentKey, sinceVersion, { itemType } = {}) {
       await ensureInfo();
+      const filter = itemType ? `&itemType=${encodeURIComponent(itemType)}` : '';
       const res = await read(
-        `/api/users/0/items/${parentKey}/children?format=json`,
+        `/api/users/0/items/${parentKey}/children?format=json${filter}`,
         sinceVersion !== undefined ? { 'If-Modified-Since-Version': String(sinceVersion) } : {},
       );
       const libraryVersion = Number.parseInt(res.headers.get('Last-Modified-Version') ?? '', 10);

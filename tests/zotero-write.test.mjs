@@ -192,6 +192,20 @@ test('listChildren sends If-Modified-Since-Version and maps 304', async () => {
   assert.equal(c.headers['If-Modified-Since-Version'], '40');
 });
 
+test('listChildren appends itemType filter when given (annotations are omitted otherwise)', async () => {
+  const f = fakeFetch((u) => {
+    if (u.includes('/children')) return res(200, [], { 'Last-Modified-Version': '7' });
+  });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore() });
+  await w.listChildren('ATT1', undefined, { itemType: 'annotation' });
+  await w.listChildren('ITEM1', 5, { itemType: 'note || attachment' });
+  const urls = f.calls.filter((x) => x.url.includes('/children'));
+  assert.equal(urls[0].url, 'http://127.0.0.1:23119/api/users/0/items/ATT1/children?format=json&itemType=annotation');
+  assert.equal(urls[0].headers['If-Modified-Since-Version'], undefined);
+  assert.equal(urls[1].url, 'http://127.0.0.1:23119/api/users/0/items/ITEM1/children?format=json&itemType=note%20%7C%7C%20attachment');
+  assert.equal(urls[1].headers['If-Modified-Since-Version'], '5');
+});
+
 test('listChildren returns items and libraryVersion; getItem 404 -> null', async () => {
   const f = fakeFetch((u) => {
     if (u.includes('/children')) return res(200, [{ key: 'A' }], { 'Last-Modified-Version': '41' });
