@@ -89,7 +89,8 @@ export async function vendor({ dest = DEST, fetchImpl = fetch } = {}) {
   for (const { name, data } of readTar(tar)) {
     const rel = target(name);
     if (!rel) continue;
-    const file = path.join(dest, rel);
+    const file = path.resolve(dest, rel);
+    if (!file.startsWith(path.resolve(dest) + path.sep)) throw new Error(`tar 항목이 대상 폴더 밖을 가리킵니다: ${name}`);
     await fs.mkdir(path.dirname(file), { recursive: true });
     await fs.writeFile(file, data);
     count += 1;
