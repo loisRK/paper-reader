@@ -19,7 +19,7 @@ test('detect: exit 0 is available with version; ENOENT and failures give Korean 
   const [c, x] = await detectAgents({ run });
   assert.deepEqual(c, { id: 'claude', name: 'Claude Code', available: true, version: '2.1.328 (Claude Code)' });
   assert.deepEqual(x, { id: 'codex', name: 'Codex', available: false, message: '설치되어 있지 않습니다' });
-  assert.deepEqual(calls.map((k) => [k.cmd, k.args]), [['claude', ['--version']], ['codex', ['--version']]]);
+  assert.deepEqual(calls.map((k) => [k.cmd, k.args]), [['claude', ['--version']], ['codex', ['--version']], ['gemini', ['--version']]]);
   assert.equal(calls[0].opts.timeoutMs, 5000);
 
   const failing = async (cmd) => ({ code: 1, stdout: '', stderr: '\nError: boom\nsecond line\n' });
@@ -97,7 +97,85 @@ test('settings: agent is kept across folder writes and vice versa', async () => 
     await writeSettings(d, { agent: 'claude' });
     assert.deepEqual((await readSettings(d)).folders, [path.resolve(d)]);
     await assert.rejects(writeSettings(d, { agent: 'gpt' }), { status: 400 });
+    await writeSettings(d, { agent: 'gemini' });
+    assert.equal((await readSettings(d)).agent, 'gemini');
     await fs.writeFile(path.join(d, 'settings.json'), JSON.stringify({ folders: [], agent: 'zzz' }));
     assert.deepEqual(await readSettings(d), { folders: [] });
   } finally { await fs.rm(d, { recursive: true, force: true }); }
+});
+
+// ---- Gemini CLI ----
+import { geminiPolicyRules, geminiPolicyToml } from '../src/agent/commands.mjs';
+
+// Same shape as Gemini CLI's stableStringify for tool args: sorted top-level keys, each pair wrapped in \0.
+const argsString = (o) => `{${Object.keys(o).sort().map((k) => `\0${JSON.stringify(k)}:${JSON.stringify(o[k])}\0`).join(',')}}`;
+// Highest-priority matching rule wins; returns its decision (or 'none').
+function decide(rules, name, args) {
+  const s = argsString(args);
+  const hit = [...rules].sort((a, b) => b.priority - a.priority).find((r) => {
+    const names = [].concat(r.toolName);
+    if (!names.includes(name) && !names.includes('*')) return false;
+    return !r.argsPattern || new RegExp(r.argsPattern).test(s);
+  });
+  return hit?.decision ?? 'none';
+}
+
+test('detect: gemini is the third tool; version range >=0.40 <1, else unsafe', async () => {
+  const runFor = (ver) => async (cmd) => (cmd === 'gemini' ? { code: 0, stdout: `${ver}\n`, stderr: '' } : { code: 0, stdout: '1.0.0\n', stderr: '' });
+  const ok = await detectAgents({ run: runFor('0.46.0') });
+  assert.deepEqual(ok.map((a) => a.id), ['claude', 'codex', 'gemini']);
+  assert.deepEqual(ok[2], { id: 'gemini', name: 'Gemini CLI', available: true, version: '0.46.0' });
+  for (const v of ['0.39.9', '1.0.0', '2.3.1', 'nightly']) {
+    const g = (await detectAgents({ run: runFor(v) }))[2];
+    assert.equal(g.available, false, v);
+    assert.match(g.message, /^안전하게 실행할 수 없는 버전입니다/, v);
+  }
+  assert.equal((await detectAgents({ run: runFor('0.40.0') }))[2].available, true);
+});
+
+test('gemini command: headless, auto_edit, our policy file, no extensions/MCP, workspace trust', () => {
+  const { cmd, args, files } = agentCommand('gemini', { workdir: '/w', prompt: 'P' });
+  assert.equal(cmd, 'gemini');
+  assert.deepEqual(args.slice(0, 2), ['-p', 'P']);
+  assert.equal(args[args.indexOf('--approval-mode') + 1], 'auto_edit');
+  assert.equal(args[args.indexOf('--policy') + 1], path.join('/w', '.gemini-policy.toml'));
+  assert.equal(args[args.indexOf('--output-format') + 1], 'stream-json');
+  assert.equal(args[args.indexOf('-e') + 1], 'none');
+  assert.equal(args[args.indexOf('--allowed-mcp-server-names') + 1], 'paper-reader-none');
+  assert.ok(args.includes('--skip-trust'));
+  for (const bad of ['--yolo', '-y', 'yolo', '--allowed-tools']) assert.ok(!args.includes(bad), bad);
+  assert.equal(files['.gemini-policy.toml'], geminiPolicyToml('/w'));
+  const s = JSON.parse(files['.gemini/settings.json']);
+  assert.deepEqual(s.tools.exclude, ['run_shell_command', 'web_fetch', 'google_web_search']);
+  assert.equal(s.hooksConfig.enabled, false);
+  assert.equal(s.telemetry.enabled, false);
+  assert.equal(s.privacy.usageStatisticsEnabled, false);
+});
+
+test('gemini policy: shell/web denied, reads only workdir files, writes only digest.json', () => {
+  const rules = geminiPolicyRules('/tmp/paper-reader-digest-abc');
+  for (const r of rules) assert.ok(r.priority >= 950 && r.priority <= 999, 'above every settings-derived user-tier rule (<= 4.9)');
+  for (const t of ['run_shell_command', 'web_fetch', 'google_web_search']) {
+    assert.equal(decide(rules, t, { command: 'ls', url: 'http://x' }), 'deny', t);
+  }
+  assert.equal(decide(rules, 'mcp_server_tool', {}), 'deny');
+  assert.equal(decide(rules, 'activate_skill', { name: 'x' }), 'deny');
+  assert.equal(decide(rules, 'read_file', { file_path: 'paper.txt' }), 'allow');
+  assert.equal(decide(rules, 'read_file', { file_path: '/tmp/paper-reader-digest-abc/figures.txt', start_line: 1 }), 'allow');
+  assert.equal(decide(rules, 'read_file', { file_path: '/private/tmp/paper-reader-digest-abc/TASK.md' }), 'allow');
+  assert.equal(decide(rules, 'read_file', { file_path: '/Users/me/.ssh/id_rsa' }), 'deny');
+  assert.equal(decide(rules, 'read_file', { file_path: '../x/paper.txt' }), 'deny');
+  assert.equal(decide(rules, 'list_directory', { dir_path: '.' }), 'allow');
+  assert.equal(decide(rules, 'list_directory', { dir_path: '/' }), 'deny');
+  assert.equal(decide(rules, 'write_file', { file_path: 'digest.json', content: '{}' }), 'allow');
+  assert.equal(decide(rules, 'replace', { file_path: '/tmp/paper-reader-digest-abc/digest.json', old_string: 'a', new_string: 'b' }), 'allow');
+  assert.equal(decide(rules, 'write_file', { file_path: '/Users/me/.zshrc', content: '"file_path":"digest.json"' }), 'deny');
+  assert.equal(decide(rules, 'write_file', { file_path: 'TASK.md', content: 'x' }), 'deny');
+  assert.equal(decide(rules, 'write_file', { file_path: '/tmp/paper-reader-digest-abc-evil/digest.json', content: 'x' }), 'deny');
+  const toml = geminiPolicyToml('/tmp/paper-reader-digest-abc');
+  assert.equal((toml.match(/^\[\[rule\]\]$/gm) ?? []).length, rules.length);
+  assert.match(toml, /toolName = \["run_shell_command", "web_fetch", "google_web_search"\]\ndecision = "deny"\npriority = 999/);
+  // each argsPattern is written as a TOML basic string that decodes back to the same regex
+  for (const r of rules.filter((x) => x.argsPattern)) assert.ok(toml.includes(`argsPattern = ${JSON.stringify(r.argsPattern)}`));
+  assert.throws(() => geminiPolicyRules('/tmp/a"b'));
 });

@@ -79,8 +79,35 @@ export function summarizeStreamLine(line) {
   return null;
 }
 
-const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in/i;
-const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached/i;
+const firstOf = (v) => String(v ?? '').split('\n')[0].trim();
+
+/** One Gemini CLI stream-json line -> short Korean log line, or null. Never includes file contents or model text. */
+export function summarizeGeminiLine(line) {
+  let o;
+  try { o = JSON.parse(line); } catch { return null; }
+  if (!o || typeof o !== 'object') return null;
+  if (o.type === 'tool_use') {
+    const f = o.parameters?.file_path;
+    const base = typeof f === 'string' ? path.basename(f) : '';
+    if ((o.tool_name === 'write_file' || o.tool_name === 'replace') && base) return `파일 쓰기: ${base}`;
+    if (o.tool_name === 'read_file' && base) return `읽기: ${base}`;
+    if (o.tool_name === 'list_directory') return '폴더 보기';
+    return typeof o.tool_name === 'string' ? `도구 요청: ${clip(o.tool_name, 60)}` : null;
+  }
+  if (o.type === 'tool_result') {
+    return o.status === 'error' ? `도구 거부·오류: ${firstOf(o.error?.message)}` : null;
+  }
+  if (o.type === 'result') {
+    return o.status === 'success' ? '완료' : `오류: ${firstOf(o.error?.message ?? o.status)}`;
+  }
+  if (o.type === 'error') return `${o.severity === 'warning' ? '경고' : '오류'}: ${firstOf(o.message)}`;
+  return null;
+}
+
+const SUMMARIZERS = { claude: summarizeStreamLine, gemini: summarizeGeminiLine };
+
+const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|set an auth method|GEMINI_API_KEY|UNAUTHENTICATED/i;
+const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached|RESOURCE_EXHAUSTED/i;
 
 function hintFor(id, text) {
   if (LOGIN_RE.test(text)) return `AI 도구 로그인이 필요합니다. 터미널에서 ${id}를 한 번 실행해 로그인하세요.`;
@@ -98,7 +125,11 @@ export function runAgent({
   let child;
   try {
     const { cmd, args, files } = agentCommand(id, { workdir, prompt });
-    for (const [rel, content] of Object.entries(files)) fs.writeFileSync(path.join(workdir, rel), content);
+    for (const [rel, content] of Object.entries(files)) {
+      const file = path.join(workdir, rel);
+      fs.mkdirSync(path.dirname(file), { recursive: true });
+      fs.writeFileSync(file, content);
+    }
     child = spawnImpl(cmd, args, { cwd: workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
   } catch {
     return failed(SPAWN_FAIL);
@@ -136,7 +167,7 @@ export function runAgent({
 
   const emit = (line, summarize) => {
     if (!line.trim()) return;
-    const out = summarize ? summarizeStreamLine(line) : line;
+    const out = summarize ? summarize(line) : line;
     // Hint detection uses plain text only: never the raw stream-json (it may quote paper text).
     if (!summarize) tail = (tail + '\n' + line).slice(-4000);
     else if (out && out.startsWith('오류:')) tail = (tail + '\n' + out).slice(-4000);
@@ -155,8 +186,8 @@ export function runAgent({
     });
     stream.on('end', () => { if (buf) emit(buf, summarize); buf = ''; });
   };
-  pump(child.stdout, id === 'claude');
-  pump(child.stderr, false);
+  pump(child.stdout, SUMMARIZERS[id] ?? null);
+  pump(child.stderr, null);
 
   const done = new Promise((resolve) => {
     finish = (result) => {

@@ -260,7 +260,7 @@ test('start errors: 409 while running, 404 unknown, 400 example, 400 no tool', a
   await assert.rejects(c.jobs.start('ex1'), (e) => e.status === 400 && e.message === '예제 논문은 요약을 다시 만들 수 없습니다.');
   assert.equal(c.jobs.get('ghost'), null);
   const none = await setup(t, { runs: [], agent: null });
-  await assert.rejects(none.jobs.start('p1'), (e) => e.status === 400 && e.message === '쓸 수 있는 AI 도구가 없습니다. Claude Code나 Codex를 설치하고 로그인하세요.');
+  await assert.rejects(none.jobs.start('p1'), (e) => e.status === 400 && e.message === '쓸 수 있는 AI 도구가 없습니다. Claude Code, Codex, Gemini CLI 중 하나를 설치하고 로그인하세요.');
   // a finished job stays queryable; failed start does not replace it
   assert.equal(c.jobs.get('p1').state, 'done');
 });

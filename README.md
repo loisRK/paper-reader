@@ -77,6 +77,18 @@ cp paper-reader.config.example.json paper-reader.config.json
 
 저장소 루트의 [`AGENTS.md`](AGENTS.md)에 같은 절차가 적혀 있습니다. 도구에게 "AGENTS.md대로 'LLM agent operations' 논문을 검색해줘", "AGENTS.md대로 `<citekey>` 논문을 요약해줘"처럼 요청하세요. 작성 규칙은 모든 도구가 `prompts/search-summary.md`, `prompts/digest.md`를 공통으로 따릅니다.
 
+### 읽기 앱에서 요약 만들기 (AI 도구)
+
+읽기 앱의 **요약 만들기** 버튼은 이 컴퓨터에 설치·로그인된 AI 도구 하나를 실행합니다. 왼쪽 **AI 도구** 칸에서 고릅니다(`data/settings.json`에 저장).
+
+| 도구 | 감지 | 실행 방식과 막힌 것 |
+|---|---|---|
+| Claude Code | `claude --version` | `--permission-mode dontAsk`, 허용 도구 Read·Write·Edit·Glob·Grep만. Bash·WebFetch·WebSearch 금지, 작업 폴더 밖 쓰기 금지, 홈 폴더 읽기 금지. |
+| Codex | `codex --version` | `codex exec --sandbox workspace-write`, 네트워크 끔, 쓰기는 작업 폴더만. |
+| Gemini CLI | `gemini --version` (0.40 이상 1.0 미만만) | `gemini -p … --approval-mode auto_edit --policy <작업 폴더 정책>`. 정책 파일이 모든 도구를 막고, 작업 폴더의 입력 파일 읽기와 `digest.json` 쓰기만 허용합니다. 셸(`run_shell_command`)·웹(`web_fetch`, `google_web_search`)·MCP·확장·훅 금지. 범위 밖 버전은 `안전하게 실행할 수 없는 버전입니다`로 표시되고 쓸 수 없습니다. |
+
+모든 도구는 임시 작업 폴더(홈 폴더 밖)에서 실행되며, 그 폴더에는 논문 본문(`paper.txt`)·그림 목록·작성 규칙·작업 지시만 들어갑니다. 저장소·PDF·`outputDir` 경로는 넘기지 않고, 끝나면 폴더를 지웁니다. 결과는 서버가 검증한 뒤에만 기존 요약과 바꿉니다.
+
 ### 직접 실행하는 명령
 
 ```bash

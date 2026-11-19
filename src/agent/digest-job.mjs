@@ -12,7 +12,7 @@ const LOG_LINES = 20;
 const LOG_CHARS = 200;
 const RULES_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'prompts', 'digest.md');
 
-export const NO_AGENT_MESSAGE = '쓸 수 있는 AI 도구가 없습니다. Claude Code나 Codex를 설치하고 로그인하세요.';
+export const NO_AGENT_MESSAGE = '쓸 수 있는 AI 도구가 없습니다. Claude Code, Codex, Gemini CLI 중 하나를 설치하고 로그인하세요.';
 export const BUSY_MESSAGE = '다른 논문의 요약을 만들고 있습니다.';
 export const EXAMPLE_MESSAGE = '예제 논문은 요약을 다시 만들 수 없습니다.';
 export const NOT_FOUND_MESSAGE = '논문을 찾을 수 없습니다.';

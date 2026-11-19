@@ -251,3 +251,66 @@ test('runAgent: paper text in stream-json does not trigger a login/limit hint', 
   calls[0].child.emit('close', 1, null);
   assert.equal((await done).errorHint, undefined);
 });
+
+// ---- Gemini CLI ----
+import { summarizeGeminiLine } from '../src/agent/run.mjs';
+
+test('summarizeGeminiLine: tool names to short Korean lines, never contents', () => {
+  const j = (o) => JSON.stringify(o);
+  assert.equal(summarizeGeminiLine(j({ type: 'init', session_id: 's', model: 'gemini-2.5-pro' })), null);
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_use', tool_name: 'read_file', tool_id: 't', parameters: { file_path: '/w/paper.txt' } })), '읽기: paper.txt');
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_use', tool_name: 'write_file', parameters: { file_path: 'digest.json', content: 'SECRET' } })), '파일 쓰기: digest.json');
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_use', tool_name: 'replace', parameters: { file_path: '/w/digest.json', old_string: 'SECRET' } })), '파일 쓰기: digest.json');
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_use', tool_name: 'list_directory', parameters: { dir_path: '.' } })), '폴더 보기');
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_use', tool_name: 'run_shell_command', parameters: { command: 'rm -rf /' } })), '도구 요청: run_shell_command');
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_result', tool_id: 't', status: 'success', output: 'SECRET' })), null);
+  assert.equal(summarizeGeminiLine(j({ type: 'tool_result', status: 'error', error: { type: 'x', message: 'Tool denied by policy\nmore' } })), '도구 거부·오류: Tool denied by policy');
+  assert.equal(summarizeGeminiLine(j({ type: 'message', role: 'assistant', content: 'SECRET', delta: true })), null);
+  assert.equal(summarizeGeminiLine(j({ type: 'result', status: 'success', stats: {} })), '완료');
+  assert.equal(summarizeGeminiLine(j({ type: 'result', status: 'error', error: { type: 'API', message: 'Quota exceeded\nx' } })), '오류: Quota exceeded');
+  assert.equal(summarizeGeminiLine(j({ type: 'error', severity: 'error', message: 'Maximum session turns exceeded' })), '오류: Maximum session turns exceeded');
+  assert.equal(summarizeGeminiLine(j({ type: 'error', severity: 'warning', message: 'Loop detected' })), '경고: Loop detected');
+  assert.equal(summarizeGeminiLine('Loaded cached credentials.'), null);
+});
+
+test('runAgent gemini: policy + settings files written into the workdir, stream-json summarized', async () => {
+  const w = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-gw-'));
+  const { impl, calls } = fakeSpawn();
+  const logs = [];
+  const { done } = runAgent({ id: 'gemini', workdir: w, prompt: 'P', spawnImpl: impl, onLog: (l) => logs.push(l) });
+  assert.equal(calls[0].cmd, 'gemini');
+  assert.match(await fs.readFile(path.join(w, '.gemini-policy.toml'), 'utf8'), /run_shell_command/);
+  assert.ok(JSON.parse(await fs.readFile(path.join(w, '.gemini', 'settings.json'), 'utf8')).tools);
+  calls[0].child.stdout.write('{"type":"init","model":"gemini-2.5-pro"}\n{"type":"tool_use","tool_name":"write_file","parameters":{"file_path":"digest.json","content":"BIG"}}\n{"type":"result","status":"success"}\n');
+  calls[0].child.stdout.end(); calls[0].child.stderr.end();
+  await tick();
+  calls[0].child.emit('close', 0, null);
+  await done;
+  assert.deepEqual(logs, ['파일 쓰기: digest.json', '완료']);
+  await fs.rm(w, { recursive: true });
+});
+
+test('runAgent gemini: login and quota hints', async () => {
+  for (const [text, hint] of [
+    ['Please set an Auth method in your settings.json or specify GEMINI_API_KEY', 'AI 도구 로그인이 필요합니다. 터미널에서 gemini를 한 번 실행해 로그인하세요.'],
+    ['When using Gemini API, you must specify the GEMINI_API_KEY environment variable.', 'AI 도구 로그인이 필요합니다. 터미널에서 gemini를 한 번 실행해 로그인하세요.'],
+    ['[API Error: RESOURCE_EXHAUSTED]', 'AI 도구 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.'],
+    ['Quota exceeded for quota metric', 'AI 도구 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.'],
+  ]) {
+    const { impl, calls } = fakeSpawn();
+    const { done } = runAgent({ id: 'gemini', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+    calls[0].child.stderr.write(`${text}\n`);
+    calls[0].child.stdout.end(); calls[0].child.stderr.end();
+    await tick();
+    calls[0].child.emit('close', 1, null);
+    assert.equal((await done).errorHint, hint, text);
+  }
+  // a stream-json result error also feeds the hint
+  const { impl, calls } = fakeSpawn();
+  const { done } = runAgent({ id: 'gemini', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+  calls[0].child.stdout.write('{"type":"result","status":"error","error":{"message":"Quota exceeded"}}\n');
+  calls[0].child.stdout.end(); calls[0].child.stderr.end();
+  await tick();
+  calls[0].child.emit('close', 1, null);
+  assert.equal((await done).errorHint, 'AI 도구 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.');
+});
