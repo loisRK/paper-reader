@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
-import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure } from '../src/reader/public/views/paper.js';
+import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds } from '../src/reader/public/views/paper.js';
 import { progressPercent } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
@@ -332,4 +332,31 @@ test('figureSlug / findFigure', () => {
   assert.equal(findFigure([a, b], { label: 'Figure 1', page: 9 }), a);
   assert.equal(findFigure([a], { label: 'Figure 2', page: 3 }), null);
   assert.equal(findFigure(undefined, { label: 'Figure 1' }), null);
+});
+
+test('figureDomIds: 쪽 포함, 중복은 -2, 빈 slug는 figure', () => {
+  const ids = figureDomIds([
+    { label: 'Figure 1', page: 3 }, { label: 'Figure 1', page: 7 }, { label: 'Figure 1', page: 7 },
+    { label: '그림', page: 2 },
+  ]);
+  assert.deepEqual(ids, ['fig-p3-figure-1', 'fig-p7-figure-1', 'fig-p7-figure-1-2', 'fig-p2-figure']);
+});
+
+test('figureLayout: 캡션 블록은 접지 않고, 블록당 역할은 하나', () => {
+  const blocks = [
+    { id: 'a', type: 'paragraph', page: 1, sentenceIds: ['sa'] },
+    { id: 'c1', type: 'caption', page: 1, sentenceIds: ['sc1'] },
+    { id: 'c2', type: 'caption', page: 1, sentenceIds: ['sc2'] },
+    { id: 'd', type: 'paragraph', page: 1, sentenceIds: ['sd'] },
+  ];
+  const m = figureLayout({ blocks, figures: [
+    { label: 'Figure 1', page: 1, captionSentenceId: 'sc1', image: 'a.png', blockIds: ['a', 'c1', 'c2'] },
+    { label: 'Figure 2', page: 1, captionSentenceId: 'sc2', image: 'b.png', blockIds: ['a', 'd'] },
+  ] });
+  assert.equal(m.get('c1').role, 'image-before');
+  assert.equal(m.get('c2').role, 'image-before');
+  assert.equal(m.get('c2').figure.label, 'Figure 2');
+  assert.equal(m.get('a').figure.label, 'Figure 1');
+  assert.equal(m.get('d').figure.label, 'Figure 2');
+  assert.equal(m.size, 4);
 });

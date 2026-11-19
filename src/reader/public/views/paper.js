@@ -67,16 +67,35 @@ export function findFigure(figures, f) {
   return hits.find((x) => x.page === f?.page) ?? hits[0] ?? null;
 }
 
+// Unique DOM id per figure (aligned with `figures`): fig-p<page>-<slug>, -2/-3… on collision.
+export function figureDomIds(figures) {
+  const used = new Set();
+  return (figures ?? []).map((f) => {
+    const base = `fig-p${f?.page ?? 0}-${figureSlug(f?.label) || 'figure'}`;
+    let id = base;
+    for (let n = 2; used.has(id); n += 1) id = `${base}-${n}`;
+    used.add(id);
+    return id;
+  });
+}
+
 // blockId → { figure, role }. Only figures with an image take part; legacy extractions → empty Map.
+// Every block gets at most one role; caption blocks are never folded.
 export function figureLayout(source) {
   const out = new Map();
   const blocks = source?.blocks ?? [];
-  for (const fig of source?.figures ?? []) {
-    if (!fig?.image) continue;
+  const figs = (source?.figures ?? []).filter((f) => f?.image);
+  const caps = new Map();
+  for (const fig of figs) {
     const cap = blocks.find((b) => (b.sentenceIds ?? []).includes(fig.captionSentenceId));
-    if (!cap) continue;
+    if (cap) caps.set(fig, cap);
+  }
+  const capIds = new Set([...caps.values()].map((c) => c.id));
+  for (const fig of figs) {
+    const cap = caps.get(fig);
+    if (!cap || out.has(cap.id)) continue;
     out.set(cap.id, { figure: fig, role: 'image-before' });
-    for (const id of fig.blockIds ?? []) if (!out.has(id)) out.set(id, { figure: fig, role: 'folded' });
+    for (const id of fig.blockIds ?? []) if (!capIds.has(id) && !out.has(id)) out.set(id, { figure: fig, role: 'folded' });
   }
   return out;
 }
@@ -148,6 +167,8 @@ function sourcePanel(source, links, onClose, paperId) {
   });
 
   const layout = figureLayout(source);
+  const allIds = figureDomIds(source.figures);
+  const domIds = new Map((source.figures ?? []).map((f, i) => [f, allIds[i]]));
   const blockEl = (b) => {
     const ids = b.sentenceIds ?? [];
     if (b.type === 'heading') return el('h3', { class: 'src-heading' }, sentenceSpans(ids));
@@ -157,16 +178,18 @@ function sourcePanel(source, links, onClose, paperId) {
   const blockById = new Map((source.blocks ?? []).map((b) => [b.id, b]));
   const figureNode = (fig) => {
     const src = `/api/papers/${encodeURIComponent(paperId)}/figures/${encodeURIComponent(fig.image)}`;
-    const cap = sentences[fig.captionSentenceId]?.text ?? fig.label ?? '';
+    let cap = sentences[fig.captionSentenceId]?.text ?? fig.label ?? '';
+    if (cap.length > 160) cap = `${cap.slice(0, 160)}…`;
     const img = el('img', { loading: 'lazy', decoding: 'async', alt: cap, src });
     const link = el('a', { href: src, target: '_blank', rel: 'noopener noreferrer', title: '새 탭에서 원본 크기로 열기' }, img);
     const fail = el('p', { class: 'fig-fail muted', hidden: true }, '그림을 불러오지 못했습니다 — ', pageLink(fig.page, links));
     img.addEventListener('error', () => { link.hidden = true; fail.hidden = false; });
-    return el('figure', { class: 'src-figure', id: `fig-${figureSlug(fig.label)}` }, link, fail);
+    return el('figure', { class: 'src-figure', id: domIds.get(fig) }, link, fail);
   };
   const foldedText = (fig) => {
     // document order, whichever side of the caption the blocks sit on
-    const order = (source.blocks ?? []).filter((x) => (fig.blockIds ?? []).includes(x.id));
+    const order = (source.blocks ?? []).filter((x) => (fig.blockIds ?? []).includes(x.id)
+      && layout.get(x.id)?.figure === fig && layout.get(x.id).role === 'folded');
     if (!order.length) return null;
     const d = el('details', { class: 'fig-text' }, el('summary', { text: '그림 속 글자 보기' }));
     for (const x of order) d.append(blockEl(x));
@@ -301,7 +324,8 @@ export function render(container, data, actions) {
   const hasImage = (f) => Boolean(findFigure(source.figures, f)?.image) && figLayout.size > 0;
   function showFigure(f) {
     const fig = findFigure(source.figures, f);
-    const node = fig ? source_.querySelector(`#fig-${CSS.escape(figureSlug(fig.label))}`) : null;
+    const idx = fig ? (source.figures ?? []).indexOf(fig) : -1;
+    const node = idx >= 0 ? document.getElementById(figureDomIds(source.figures)[idx]) : null;
     if (!node) { actions.toast('원문에서 그림을 찾지 못했습니다.'); return; }
     const go = () => {
       node.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
