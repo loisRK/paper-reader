@@ -86,7 +86,7 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .btn:hover { background: var(--accent-strong); border-color: var(--accent-strong); }
 .btn:active, .toggle:active { transform: scale(0.95); }
 .btn:disabled { opacity: .5; cursor: progress; }
-.btn-quiet, .btn-quiet:hover { background: transparent; color: var(--text); border-color: var(--line); }
+.btn-quiet { background: transparent; color: var(--text); border-color: var(--line); }
 .btn-quiet:hover { background: var(--accent-soft); border-color: var(--accent); }
 .toggle { background: transparent; color: var(--text); border-color: var(--line); }
 .toggle:hover { background: var(--accent-soft); border-color: var(--accent); }
@@ -298,7 +298,6 @@ body.paper-mode #app { max-width: none; padding: 0; }
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; scroll-behavior: auto !important; }
-  .btn:active, .toggle:active { transform: none; }
   .btn:active, .toggle:active { transform: none; }
 }
 

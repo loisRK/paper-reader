@@ -23,6 +23,12 @@ function append(node, children) {
   }
 }
 
+// replaceChildren() turns null into the text "null"; this skips null/undefined/false like el().
+export function setChildren(node, ...children) {
+  node.replaceChildren();
+  append(node, children);
+}
+
 export function clear(node) {
   node.replaceChildren();
 }

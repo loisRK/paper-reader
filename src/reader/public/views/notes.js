@@ -1,6 +1,6 @@
 // Highlights and memos on the source panel. Pure helpers are tested in Node;
 // the DOM pieces only touch `document` when called.
-import { el } from './dom.js';
+import { el, setChildren } from './dom.js';
 
 // Duplicate of ZOTERO_COLORS in src/zotero/annotations.mjs (source of truth; the
 // static root is public/, so the server module can't be imported here).
@@ -185,7 +185,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     if (!s.lastJson) { statusNode.replaceChildren(); return; }
     const needsAuth = n.status === 'needs-auth' || n.status === 'denied';
     statusNode.className = `notes-status st-${n.status}`;
-    statusNode.replaceChildren(
+    setChildren(statusNode,
       el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
       n.failed > 0 ? el('span', { class: 'st-badge st-failed', text: failedText(n.failed), title: n.failedMessage ?? '' }) : null,
       needsAuth ? el('button', {
