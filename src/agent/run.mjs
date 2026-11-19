@@ -34,6 +34,7 @@ export async function prepareWorkdir({ source, digestRules, researchContext, pre
     if (researchContext) await fsp.copyFile(researchContext, path.join(dir, 'research-context.md'));
     if (previousDigest) await fsp.copyFile(previousDigest, path.join(dir, 'digest.json'));
     await fsp.writeFile(path.join(dir, 'TASK.md'), TASK_MD);
+    for (const f of await fsp.readdir(dir)) await fsp.chmod(path.join(dir, f), 0o600);
   } catch (err) {
     await fsp.rm(dir, { recursive: true, force: true });
     throw err;
@@ -74,7 +75,7 @@ export function summarizeStreamLine(line) {
   return null;
 }
 
-const LOGIN_RE = /not logged in|\/login|invalid api key|authentication|unauthorized|log in|login required|credentials/i;
+const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in/i;
 const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached/i;
 
 function hintFor(id, text) {
@@ -83,32 +84,65 @@ function hintFor(id, text) {
   return undefined;
 }
 
-export function runAgent({ id, workdir, prompt, timeoutMs = 20 * 60 * 1000, spawnImpl = spawn, killImpl = process.kill, onLog = () => {} }) {
-  const { cmd, args, files } = agentCommand(id, { workdir, prompt });
-  for (const [rel, content] of Object.entries(files)) fs.writeFileSync(path.join(workdir, rel), content);
+const SPAWN_FAIL = 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.';
 
-  const child = spawnImpl(cmd, args, { cwd: workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+export function runAgent({
+  id, workdir, prompt, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
+  spawnImpl = spawn, killImpl = process.kill, onLog = () => {},
+}) {
+  const failed = (hint) => ({ done: Promise.resolve({ code: null, signal: null, timedOut: false, errorHint: hint }), cancel() {} });
+  let child;
+  try {
+    const { cmd, args, files } = agentCommand(id, { workdir, prompt });
+    for (const [rel, content] of Object.entries(files)) fs.writeFileSync(path.join(workdir, rel), content);
+    child = spawnImpl(cmd, args, { cwd: workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+  } catch {
+    return failed(SPAWN_FAIL);
+  }
+
   let exited = false;
   let timedOut = false;
+  let killed = false;
   let tail = '';
   let timer = null;
-  let killed = false;
+  let graceTimer = null;
+  let waitTimer = null;
+  let finish = () => {};
 
+  const signalGroup = (sig) => {
+    try { killImpl(-child.pid, sig); } catch { try { child.kill(sig); } catch { /* gone */ } }
+  };
   const killGroup = () => {
     if (exited || killed) return;
     killed = true;
-    try { killImpl(-child.pid, 'SIGTERM'); } catch { try { child.kill('SIGTERM'); } catch { /* gone */ } }
+    signalGroup('SIGTERM');
+    graceTimer = setTimeout(() => {
+      if (exited) return;
+      signalGroup('SIGKILL');
+      waitTimer = setTimeout(() => {
+        // close never came (descendant holds the pipes): give up waiting.
+        child.stdout?.destroy?.();
+        child.stderr?.destroy?.();
+        finish({ code: null, signal: 'SIGKILL', timedOut });
+      }, closeWaitMs);
+      waitTimer.unref?.();
+    }, graceMs);
+    graceTimer.unref?.();
   };
 
   const emit = (line, summarize) => {
     if (!line.trim()) return;
-    tail = (tail + '\n' + line).slice(-4000);
     const out = summarize ? summarizeStreamLine(line) : line;
+    // Hint detection uses plain text only: never the raw stream-json (it may quote paper text).
+    if (!summarize) tail = (tail + '\n' + line).slice(-4000);
+    else if (out && out.startsWith('오류:')) tail = (tail + '\n' + out).slice(-4000);
     if (out) onLog(clip(out, LOG_MAX));
   };
   const pump = (stream, summarize) => {
+    if (!stream) return;
     let buf = '';
     stream.setEncoding?.('utf8');
+    stream.on('error', () => {});
     stream.on('data', (chunk) => {
       buf += chunk;
       const lines = buf.split('\n');
@@ -121,13 +155,15 @@ export function runAgent({ id, workdir, prompt, timeoutMs = 20 * 60 * 1000, spaw
   pump(child.stderr, false);
 
   const done = new Promise((resolve) => {
-    const finish = (result) => {
+    finish = (result) => {
       if (exited) return;
       exited = true;
       clearTimeout(timer);
+      clearTimeout(graceTimer);
+      clearTimeout(waitTimer);
       resolve(result);
     };
-    child.on('error', () => finish({ code: null, signal: null, timedOut, errorHint: 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.' }));
+    child.on('error', () => finish({ code: null, signal: null, timedOut, errorHint: SPAWN_FAIL }));
     child.on('close', (code, signal) => {
       const result = { code, signal, timedOut };
       if (code !== 0 && !timedOut) {

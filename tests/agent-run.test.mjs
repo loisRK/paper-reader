@@ -181,3 +181,60 @@ test('runAgent: spawn error resolves done with a Korean hint', async () => {
   assert.equal(r.code, null);
   assert.equal(r.errorHint, 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.');
 });
+
+test('runAgent: SIGKILL escalation, and done resolves even if close never fires', async () => {
+  const { impl, calls } = fakeSpawn();
+  const kills = [];
+  const h = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {}, graceMs: 20, closeWaitMs: 20, killImpl: (pid, sig) => kills.push([pid, sig]) });
+  let destroyed = 0;
+  calls[0].child.stdout.destroy = () => { destroyed++; };
+  h.cancel();
+  const r = await h.done; // no close event is ever emitted
+  assert.deepEqual(kills, [[-4242, 'SIGTERM'], [-4242, 'SIGKILL']]);
+  assert.equal(r.signal, 'SIGKILL');
+  assert.equal(destroyed, 1);
+});
+
+test('runAgent: timeout with unresponsive process still resolves with timedOut', async () => {
+  const { impl } = fakeSpawn();
+  const { done } = runAgent({ id: 'claude', workdir: W, prompt: 'P', timeoutMs: 10, graceMs: 10, closeWaitMs: 10, spawnImpl: impl, onLog() {}, killImpl() {} });
+  assert.equal((await done).timedOut, true);
+});
+
+test('runAgent: close after SIGTERM cancels the SIGKILL timer', async () => {
+  const { impl, calls } = fakeSpawn();
+  const kills = [];
+  const h = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {}, graceMs: 20, closeWaitMs: 20, killImpl: (p, s) => kills.push(s) });
+  h.cancel();
+  calls[0].child.emit('close', null, 'SIGTERM');
+  await h.done;
+  await new Promise((r) => setTimeout(r, 60));
+  assert.deepEqual(kills, ['SIGTERM']);
+});
+
+test('runAgent: synchronous spawn throw resolves done with an error', async () => {
+  const h = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: () => { throw new Error('EACCES'); }, onLog() {} });
+  const r = await h.done;
+  assert.equal(r.code, null);
+  assert.equal(r.errorHint, 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.');
+  h.cancel();
+});
+
+test('runAgent: stream error events do not crash', async () => {
+  const { impl, calls } = fakeSpawn();
+  const { done } = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+  calls[0].child.stdout.emit('error', new Error('EPIPE'));
+  calls[0].child.stderr.emit('error', new Error('EPIPE'));
+  calls[0].child.emit('close', 0, null);
+  assert.equal((await done).code, 0);
+});
+
+test('runAgent: paper text in stream-json does not trigger a login/limit hint', async () => {
+  const { impl, calls } = fakeSpawn();
+  const { done } = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+  calls[0].child.stdout.write(JSON.stringify({ type: 'user', message: { content: [{ type: 'tool_result', content: 'Authentication is hard; rate limit; please run /login 429' }] } }) + '\n');
+  calls[0].child.stdout.end(); calls[0].child.stderr.end();
+  await tick();
+  calls[0].child.emit('close', 1, null);
+  assert.equal((await done).errorHint, undefined);
+});
