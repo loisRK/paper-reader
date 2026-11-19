@@ -1,4 +1,5 @@
 import { execFile } from 'node:child_process';
+import { redactPaths } from './digest-job.mjs';
 
 export const AGENTS = [
   { id: 'claude', name: 'Claude Code', cmd: 'claude' },
@@ -24,10 +25,10 @@ async function detectOne({ id, name, cmd }, run) {
     const r = await run(cmd, ['--version'], { timeoutMs: 5000 });
     if (r.code === 0) return { id, name, available: true, version: firstLine(r.stdout) || undefined };
     const why = firstLine(r.stderr) || firstLine(r.stdout) || `종료 코드 ${r.code}`;
-    return { id, name, available: false, message: `실행할 수 없습니다: ${why.slice(0, 200)}` };
+    return { id, name, available: false, message: `실행할 수 없습니다: ${redactPaths(why).slice(0, 200)}` };
   } catch (err) {
     if (err?.code === 'ENOENT') return { id, name, available: false, message: '설치되어 있지 않습니다' };
-    return { id, name, available: false, message: `실행할 수 없습니다: ${firstLine(err?.message).slice(0, 200)}` };
+    return { id, name, available: false, message: `실행할 수 없습니다: ${redactPaths(firstLine(err?.message)).slice(0, 200)}` };
   }
 }
 

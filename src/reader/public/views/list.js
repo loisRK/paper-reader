@@ -350,6 +350,8 @@ export function render(container, data, actions) {
       } catch (err) {
         actions.toast(err.message);
         btn.disabled = false;
+        // Another tab may already be making this very paper's digest: pick up its progress.
+        if (err.status === 409) watch(p.id);
       }
     },
     async onCancel(p, btn) {

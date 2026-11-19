@@ -38,7 +38,7 @@ test('detect: a --version that prints an ENOENT spawn error and exits non-zero i
   const run = async () => ({ code: 1, stdout: '', stderr: 'Error: spawn /opt/homebrew/x/codex ENOENT\n    at ChildProcess' });
   const [c] = await detectAgents({ run });
   assert.equal(c.available, false);
-  assert.equal(c.message, '실행할 수 없습니다: Error: spawn /opt/homebrew/x/codex ENOENT');
+  assert.equal(c.message, '실행할 수 없습니다: Error: spawn codex ENOENT');
 });
 
 test('claude command: sandbox flags and settings file', () => {

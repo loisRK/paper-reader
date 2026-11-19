@@ -160,7 +160,7 @@ const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matche
 // container: an empty element the view fills (toolbar + scrolling pages).
 // onError(err): document could not be opened (err.message is a Korean reason; the original
 // error is logged to the console and kept as err.cause).
-export function createPdfView({ paperId, source, container, onError }) {
+export function createPdfView({ paperId, source, container, toolbarHost = null, onError }) {
   const sentences = source?.sentences ?? {};
   const st = {
     disposed: false,
@@ -183,15 +183,20 @@ export function createPdfView({ paperId, source, container, onError }) {
   const btn = (text, label, onclick) => el('button', { type: 'button', class: 'btn btn-quiet pdf-zoom-btn', 'aria-label': label, title: label, text, onclick });
   const toolbar = el('div', { class: 'pdf-toolbar', role: 'toolbar', 'aria-label': 'PDF 확대' },
     btn('−', '축소', () => zoom('out')),
-    btn('맞춤', '패널 폭에 맞춤', () => zoom('fit')),
-    btn('+', '확대', () => zoom('in')),
     zoomLabel,
+    btn('+', '확대', () => zoom('in')),
+    btn('맞춤', '패널 폭에 맞춤', () => zoom('fit')),
     pageLabel,
   );
   const status = el('p', { class: 'pdf-status muted', role: 'status', text: 'PDF를 여는 중…' });
   const pagesEl = el('div', { class: 'pdf-pages' });
   const scroller = el('div', { class: 'pdf-scroll', tabindex: 0, 'aria-label': 'PDF 쪽' }, status, pagesEl);
-  container.replaceChildren(toolbar, scroller);
+  if (toolbarHost) {
+    toolbarHost.replaceChildren(toolbar); // lives in the source panel's single top row
+    container.replaceChildren(scroller);
+  } else {
+    container.replaceChildren(toolbar, scroller);
+  }
 
   // ----- layout -----
   const scaleOf = () => st.zoom * CSS_UNITS;
@@ -418,6 +423,7 @@ export function createPdfView({ paperId, source, container, onError }) {
     for (const p of st.pages) release(p);
     st.task?.destroy().catch(() => {});
     container.replaceChildren();
+    if (toolbarHost) toolbarHost.replaceChildren();
   }
 
   // ----- open -----

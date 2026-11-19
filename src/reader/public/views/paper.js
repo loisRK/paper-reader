@@ -252,18 +252,18 @@ function sourcePanel(source, links, onClose, paperId) {
       ),
     ), body);
 
+  const toolHost = el('div', { class: 'src-tools', hidden: true });
   const panel = el('aside', { class: 'source', id: 'source-panel', 'aria-label': '원문' },
     el('div', { class: 'src-top' },
-      el('div', { class: 'sheet-bar' },
-        el('span', { class: 'sheet-title', text: '원문' }),
-        el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', onclick: onClose }),
-      ),
+      el('span', { class: 'sheet-title', text: '원문' }),
       el('div', { class: 'src-tabs', role: 'tablist', 'aria-label': '원문 보기 방식' }, pdfTab, textTab),
+      el('button', { type: 'button', class: 'btn btn-quiet sheet-close', text: '닫기', onclick: onClose }),
+      toolHost,
     ),
     pdfPane,
     textPane,
   );
-  return { panel, pdfTab, textTab, pdfPane, textPane };
+  return { panel, pdfTab, textTab, pdfPane, textPane, toolHost };
 }
 
 function readStoredTab() {
@@ -423,15 +423,17 @@ export function render(container, data, actions) {
     const box = el('div', { class: 'pdf-view' });
     src.pdfPane.replaceChildren(box);
     pdf.view = createPdfView({
-      paperId: data.id, source, container: box,
+      paperId: data.id, source, container: box, toolbarHost: src.toolHost,
       onError: (err) => {
         pdf.failed = true;
         pdf.view?.dispose();
         pdf.view = null;
+        src.toolHost.hidden = true;
         pdfMessage(`PDF를 열 수 없습니다: ${err.message}`, true);
         if (state.tab === 'pdf') setTab('text');
       },
     });
+    src.toolHost.hidden = state.tab !== 'pdf';
     markCurrentEvidence();
     notesCtl?.pdfChanged();
   }
@@ -447,6 +449,7 @@ export function render(container, data, actions) {
       pane.hidden = !on;
     }
     source_.classList.toggle('tab-pdf', tab === 'pdf');
+    src.toolHost.hidden = !(tab === 'pdf' && pdf.view);
     if (tab === 'pdf') openPdf();
     else if (prev !== 'text') source_.scrollTop = textScroll.top;
     if (user) storeTab(tab);
