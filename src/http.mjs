@@ -1,5 +1,8 @@
+export const redactUrl = (url) => String(url).replace(/([?&](?:api_key|mailto)=)[^&#]*/gi, '$1***');
+
 export class HttpError extends Error {
   constructor(status, url, message) {
+    url = redactUrl(url);
     super(message ?? `HTTP ${status} for ${url}`);
     this.name = 'HttpError';
     this.status = status;

@@ -28,7 +28,7 @@ const round = (n) => Math.round(n * 100) / 100;
 const byCited = (a, b) => (b.citedBy ?? 0) - (a.citedBy ?? 0);
 const isAfter = (w, cutoff) => Boolean(w.publicationDate) && new Date(w.publicationDate) > cutoff;
 
-function note(n, criterion, perTrend) {
+export function note(n, criterion, perTrend) {
   if (n >= 3 || n >= perTrend) return null;
   return n === 0
     ? `조건을 만족하는 저널 원저가 0편입니다(${criterion}).`

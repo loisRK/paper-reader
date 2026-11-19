@@ -41,7 +41,7 @@ export function normalizeWork(raw) {
 }
 
 export async function searchWorks(query, cfg, opts = {}) {
-  const { fetchImpl, now = new Date() } = opts;
+  const { fetchImpl, now = new Date(), sleep } = opts;
   const { monthsBack, maxResults, openalexApiKey, contactEmail } = cfg.search;
   const filter = [
     'type:article',
@@ -56,7 +56,7 @@ export async function searchWorks(query, cfg, opts = {}) {
     const params = new URLSearchParams({ search: query, filter, 'per-page': String(PER_PAGE), cursor });
     if (openalexApiKey) params.set('api_key', openalexApiKey);
     if (contactEmail) params.set('mailto', contactEmail);
-    const page = await fetchJson(`${BASE}?${params}`, { fetchImpl });
+    const page = await fetchJson(`${BASE}?${params}`, { fetchImpl, ...(sleep ? { sleep } : {}) });
     const results = page.results ?? [];
     if (results.length === 0) break;
     for (const r of results) works.push(normalizeWork(r));

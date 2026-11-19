@@ -1,11 +1,12 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import { pathToFileURL } from 'node:url';
+import { HttpError } from '../http.mjs';
 import { loadConfig } from '../config.mjs';
 import { searchWorks } from './openalex.mjs';
 import { verifyWork } from './verify.mjs';
 import { loadMetrics, lookupMetrics } from './metrics.mjs';
-import { selectTrends, citationMetrics } from './trends.mjs';
+import { selectTrends, citationMetrics, note } from './trends.mjs';
 
 export function slugify(query) {
   return String(query).toLowerCase().replace(/[^a-z0-9가-힣]/g, '-').replace(/-+/g, '-').replace(/^-|-$/g, '');
@@ -23,7 +24,7 @@ export async function runSearch(query, cfg, deps = {}) {
   const verify = deps.verify ?? ((w, c, o) => verifyWork(w, c, o));
   const { perTrend } = cfg.search;
 
-  const works = await search(query, cfg, { fetchImpl, now });
+  const works = await search(query, cfg, { fetchImpl, now, ...(sleep ? { sleep } : {}) });
   const byId = new Map(works.map((w) => [w.openalexId, w]));
   const rejected = new Set();
   const cache = new Map(); // openalexId -> verify result
@@ -55,6 +56,12 @@ export async function runSearch(query, cfg, deps = {}) {
     emergingTopics: { ...s.emergingTopics, topics: s.emergingTopics.topics.map((t) => ({ ...t, papers: t.papers.filter(ok) })).filter((t) => t.papers.length) },
     journalFlow: { ...s.journalFlow, journals: s.journalFlow.journals.map((j) => ({ ...j, papers: j.papers.filter(ok) })).filter((j) => j.papers.length) },
   };
+
+  // 검증 후 최종 개수로 note 재계산.
+  const { emergingWindowMonths, topJournals } = cfg.search;
+  sections.citationSurge.note = note(sections.citationSurge.papers.length, '발표 3개월 이상·인용 1회 이상', perTrend);
+  sections.emergingTopics.note = note(sections.emergingTopics.topics.length, `최근 ${emergingWindowMonths}개월 2편 이상인 주제`, perTrend);
+  sections.journalFlow.note = note(sections.journalFlow.journals.length, '최근 12개월 발표 논문이 있는 저널', topJournals);
 
   // 번호: citationSurge → emergingTopics → journalFlow 첫 등장 순.
   const numbers = new Map();
@@ -102,6 +109,13 @@ export async function runSearch(query, cfg, deps = {}) {
   return { ...result, path: file };
 }
 
+export function cliErrorMessage(err) {
+  if (err instanceof HttpError && [401, 403, 429].includes(err.status) && /openalex\.org/.test(err.url)) {
+    return `OpenAlex 인증/사용 한도 오류(HTTP ${err.status}). https://openalex.org/settings/api 에서 무료 API 키를 받아 paper-reader.config.json의 search.openalexApiKey에 넣고 다시 실행하세요. (지금까지의 결과는 저장되지 않았습니다.)`;
+  }
+  return err.message;
+}
+
 async function main() {
   const query = process.argv.slice(2).join(' ').trim();
   if (!query) {
@@ -119,5 +133,5 @@ async function main() {
 }
 
 if (import.meta.url === pathToFileURL(process.argv[1] ?? '').href) {
-  main().catch((err) => { console.error(err.message); process.exit(1); });
+  main().catch((err) => { console.error(cliErrorMessage(err)); process.exit(1); });
 }
