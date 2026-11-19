@@ -136,3 +136,47 @@ test('singleFlight: ignores calls while running, allows again afterwards', async
   const second = f(); release(); await second;
   assert.equal(calls, 2);
 });
+
+import { debounce, memosVisible } from '../src/reader/public/views/card-memos.js';
+
+function fakeTimers() {
+  let now = 0; let nextId = 1; const pending = new Map();
+  return {
+    setTimeout: (fn, ms) => { const id = nextId++; pending.set(id, { fn, at: now + ms }); return id; },
+    clearTimeout: (id) => { pending.delete(id); },
+    advance(ms) {
+      now += ms;
+      for (const [id, t] of [...pending]) if (t.at <= now) { pending.delete(id); t.fn(); }
+    },
+  };
+}
+
+test('debounce calls once with last args after quiet period', () => {
+  const t = fakeTimers(); const calls = [];
+  const d = debounce((x) => calls.push(x), 800, t);
+  d('a'); t.advance(500); d('b'); t.advance(500); d('c');
+  assert.deepEqual(calls, []);
+  t.advance(800);
+  assert.deepEqual(calls, ['c']);
+  t.advance(2000);
+  assert.deepEqual(calls, ['c']);
+});
+
+test('debounce flush runs pending call immediately, cancel drops it', () => {
+  const t = fakeTimers(); const calls = [];
+  const d = debounce((x) => calls.push(x), 800, t);
+  d('a'); d.flush();
+  assert.deepEqual(calls, ['a']);
+  t.advance(1000);
+  assert.deepEqual(calls, ['a']);
+  d.flush(); // nothing pending
+  assert.deepEqual(calls, ['a']);
+  d('b'); d.cancel(); t.advance(1000); d.flush();
+  assert.deepEqual(calls, ['a']);
+});
+
+test('memosVisible hides memos in 3min mode and for example papers', () => {
+  assert.equal(memosVisible('10min', false), true);
+  assert.equal(memosVisible('3min', false), false);
+  assert.equal(memosVisible('10min', true), false);
+});

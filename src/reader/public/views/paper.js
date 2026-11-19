@@ -1,5 +1,6 @@
 import { el, clear, progressBar } from './dom.js';
 import { setupNotes } from './notes.js';
+import { setupCardMemos } from './card-memos.js';
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
@@ -281,6 +282,7 @@ export function render(container, data, actions) {
     ))) : null,
     full && card.tables?.length ? card.tables.map((t) => tableNode(t, showEvidence, card.id)) : null,
     full && card.figures?.length ? el('ul', { class: 'figures', 'aria-label': '그림' }, card.figures.map((f) => figureLine(f, links))) : null,
+    memos?.memoNode(card.id),
     el('label', { class: 'read-check' }, check, ' 읽음'),
     );
     if (state.current === card.id) node.setAttribute('aria-current', 'true');
@@ -301,6 +303,8 @@ export function render(container, data, actions) {
       flow.append(el('p', { class: 'empty', text: '표시할 카드가 없습니다.' }));
       return;
     }
+    memos?.reset();
+    if (memos) flow.append(memos.bannerNode);
     const seen = new Set();
     cards.forEach((card, idx) => {
       flow.append(cardNode(card, idx, seen));
@@ -340,8 +344,14 @@ export function render(container, data, actions) {
   }
   renderModeGroup();
 
-  const notesCtl = actions.notes
-    ? setupNotes({ id: data.id, source, panel: source_, actions })
+  let notesCtl = null;
+  const memos = actions.notes && actions.saveCardMemo
+    ? setupCardMemos({
+      id: data.id, actions, example: data.example === true, getMode: () => state.mode, refresh: () => notesCtl?.refresh(),
+    })
+    : null;
+  notesCtl = actions.notes
+    ? setupNotes({ id: data.id, source, panel: source_, actions, onNotes: (n) => memos?.update(n) })
     : null;
   const notesStatus = notesCtl?.statusNode ?? null;
 
@@ -377,6 +387,7 @@ export function render(container, data, actions) {
   document.addEventListener('keydown', onKey);
   return () => {
     observer?.disconnect();
+    memos?.dispose();
     notesCtl?.dispose();
     document.removeEventListener('keydown', onKey);
     document.body.classList.remove('paper-mode');

@@ -95,7 +95,7 @@ function swatches(current, onPick) {
 
 // source: extracted source (blocks, sentences); panel: the .source element.
 // Returns { statusNode, dispose }.
-export function setupNotes({ id, source, panel, actions }) {
+export function setupNotes({ id, source, panel, actions, onNotes }) {
   const order = [];
   const pageOf = new Map();
   for (const b of source.blocks ?? []) {
@@ -336,6 +336,7 @@ export function setupNotes({ id, source, panel, actions }) {
         s.notes = n;
         renderStatus();
         renderMarks();
+        onNotes?.(n);
         if (s.popover && !(sentenceMarks(n).has(s.popover))) closePopover();
         if (s.sel) renderToolbar();
       }
@@ -348,6 +349,7 @@ export function setupNotes({ id, source, panel, actions }) {
 
   return {
     statusNode,
+    refresh: poll,
     dispose() {
       s.disposed = true;
       clearTimeout(timer);

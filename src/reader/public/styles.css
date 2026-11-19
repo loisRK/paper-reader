@@ -313,3 +313,11 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .swatch { width: 1.6rem; height: 1.6rem; min-width: 1.6rem; padding: 0; border-radius: 50%; border: 2px solid var(--line); background: var(--sw); cursor: pointer; }
 .swatch[aria-pressed="true"] { border-color: var(--text); box-shadow: 0 0 0 2px var(--surface), 0 0 0 4px var(--text); }
 .conflict { background: var(--warn-bg); color: var(--warn-text); border: 1px solid var(--warn-line); border-radius: 8px; padding: .4rem .6rem; font-size: .85rem; display: flex; flex-direction: column; gap: .3rem; }
+
+/* ---------- card memos ---------- */
+.card-memo { margin-top: .6rem; border-top: 1px dashed var(--line); padding-top: .5rem; }
+.card-memo summary { cursor: pointer; font-size: .9rem; }
+.card-memo textarea { width: 100%; margin-top: .4rem; font: inherit; font-size: .95rem; padding: .4rem; border: 1px solid var(--line); border-radius: 8px; background: var(--bg); color: var(--text); resize: vertical; }
+.memo-status { display: block; font-size: .8rem; min-height: 1em; }
+.memo-conflict { margin-bottom: 1rem; }
+.memo-conflict-slot:empty { display: none; }

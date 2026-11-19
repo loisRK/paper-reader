@@ -139,7 +139,7 @@ export function createServer(cfg, deps = {}) {
       const { digest, problems } = validated(b);
       const z = b.source.zotero ?? {};
       return sendJson(res, 200, {
-        source: b.source, digest, problems, progress: b.progress, needsReextract: b.needsReextract,
+        source: b.source, digest, problems, progress: b.progress, needsReextract: b.needsReextract, example: b.example === true,
         links: {
           zoteroPdf: z.attachmentKey ? `zotero://open-pdf/library/items/${z.attachmentKey}` : null,
           zoteroItem: z.itemKey ? `zotero://select/library/items/${z.itemKey}` : null,

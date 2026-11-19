@@ -41,6 +41,8 @@ const actions = {
   addHighlight: (id, body) => api(`/api/papers/${encodeURIComponent(id)}/highlights`, sendJson('POST', body)),
   updateHighlight: (id, hid, body) => api(`/api/papers/${encodeURIComponent(id)}/highlights/${encodeURIComponent(hid)}`, sendJson('PUT', body)),
   removeHighlight: (id, hid) => api(`/api/papers/${encodeURIComponent(id)}/highlights/${encodeURIComponent(hid)}`, { method: 'DELETE' }),
+  saveCardMemo: (id, cardId, text) => api(`/api/papers/${encodeURIComponent(id)}/card-memos/${encodeURIComponent(cardId)}`, sendJson('PUT', { text })),
+  resolveNoteConflict: (id, choice) => api(`/api/papers/${encodeURIComponent(id)}/note-conflict`, sendJson('POST', { choice })),
   // Body must be JSON ({}): the server rejects empty bodies. Never throws.
   async authorize() {
     try { return await api('/api/zotero/authorize', sendJson('POST', {})); } catch (err) { return { ok: false, status: 'offline', error: err.message }; }
