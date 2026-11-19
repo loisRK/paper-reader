@@ -6,7 +6,7 @@ import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
 import { registerPaper } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
-import { isSafeName, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
+import { EXAMPLES_DIR, isSafeName, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 1024 * 1024;
@@ -91,6 +91,25 @@ async function serveStatic(res, pathname) {
   res.end(data);
 }
 
+const FIGURE_RE = /^fig-\d+-\d+\.png$/;
+
+async function readFigure(roots, id, name) {
+  for (const root of roots) {
+    if (!root) continue;
+    const figDir = path.resolve(root, id, 'figures');
+    const file = path.join(figDir, name);
+    if (!file.startsWith(figDir + path.sep)) continue;
+    try {
+      const st = await fs.lstat(file);
+      if (!st.isFile()) continue;
+      return await fs.readFile(file);
+    } catch {
+      continue;
+    }
+  }
+  return null;
+}
+
 export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir } = deps;
   const out = cfg.outputDir;
@@ -155,6 +174,15 @@ export function createServer(cfg, deps = {}) {
       await writeProgress(out, id, { read: body.read, mode: body.mode, focus: body.focus });
       res.writeHead(204);
       return res.end();
+    }
+
+    if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'figures' && method === 'GET') {
+      const id = checkName(parts[2], 'id');
+      if (!FIGURE_RE.test(parts[4])) throw new HttpError(400, '잘못된 그림 이름입니다.');
+      const data = await readFigure([out, examplesDir === undefined ? EXAMPLES_DIR : examplesDir], id, parts[4]);
+      if (!data) throw new HttpError(404, '그림 파일을 찾을 수 없습니다.');
+      res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Content-Length': data.length });
+      return res.end(data);
     }
 
     if (parts[1] === 'searches' && parts.length === 2 && method === 'GET') {

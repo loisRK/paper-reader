@@ -396,3 +396,58 @@ test('card memo for unknown or special cardId → 404', async (t) => {
     assert.equal((await r.json()).error, '요약 카드를 찾을 수 없습니다.');
   }
 });
+
+test('serves figure images from paper dir, then examples dir', async () => {
+  const png = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a, 1, 2, 3]);
+  const png2 = Buffer.from([0x89, 0x50, 0x4e, 0x47, 9, 9]);
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-fig-'));
+  const ex = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-figex-'));
+  try {
+    for (const [root, id] of [[d, 'f1'], [ex, 'e1']]) {
+      await fs.mkdir(path.join(root, id, 'figures'), { recursive: true });
+      await fs.writeFile(path.join(root, id, 'source.json'), JSON.stringify({ id, meta: { title: id } }));
+    }
+    await fs.writeFile(path.join(d, 'f1', 'figures', 'fig-1-1.png'), png);
+    await fs.writeFile(path.join(ex, 'e1', 'figures', 'fig-2-1.png'), png2);
+    await fs.writeFile(path.join(d, 'secret.png'), png);
+    await fs.symlink(path.join(d, 'secret.png'), path.join(d, 'f1', 'figures', 'fig-9-9.png'));
+    const s = createServer({ outputDir: d, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: ex });
+    await new Promise((r) => s.listen(0, '127.0.0.1', r));
+    const b = `http://127.0.0.1:${s.address().port}`;
+    try {
+      const ok = await fetch(`${b}/api/papers/f1/figures/fig-1-1.png`);
+      assert.equal(ok.status, 200);
+      assert.equal(ok.headers.get('content-type'), 'image/png');
+      assert.equal(ok.headers.get('cache-control'), 'no-cache');
+      assert.equal(ok.headers.get('x-content-type-options'), 'nosniff');
+      assert.equal(ok.headers.get('content-length'), String(png.length));
+      assert.deepEqual(Buffer.from(await ok.arrayBuffer()), png);
+      const exr = await fetch(`${b}/api/papers/e1/figures/fig-2-1.png`);
+      assert.equal(exr.status, 200);
+      assert.deepEqual(Buffer.from(await exr.arrayBuffer()), png2);
+      assert.equal((await fetch(`${b}/api/papers/f1/figures/..%2Fsource.json`)).status, 400);
+      assert.equal((await fetch(`${b}/api/papers/f1/figures/fig-1-1.jpg`)).status, 400);
+      assert.equal((await fetch(`${b}/api/papers/..%2Ff1/figures/fig-1-1.png`)).status, 400);
+      const nf = await fetch(`${b}/api/papers/f1/figures/fig-5-5.png`);
+      assert.equal(nf.status, 404);
+      assert.equal((await nf.json()).error, '그림 파일을 찾을 수 없습니다.');
+      assert.equal((await fetch(`${b}/api/papers/nope/figures/fig-1-1.png`)).status, 404);
+      assert.equal((await fetch(`${b}/api/papers/f1/figures/fig-9-9.png`)).status, 404);
+      assert.equal((await fetch(`${b}/api/papers/f1/figures/fig-1-1.png`, { method: 'POST' })).status, 404);
+    } finally { s.close(); }
+  } finally {
+    await fs.rm(d, { recursive: true, force: true });
+    await fs.rm(ex, { recursive: true, force: true });
+  }
+});
+
+test('figure endpoint rejects bad Host', async () => {
+  const res = await new Promise((resolve, reject) => {
+    import('node:http').then(({ default: http }) => {
+      const u = new URL(`${base}/api/papers/p1/figures/fig-1-1.png`);
+      http.get({ host: u.hostname, port: u.port, path: u.pathname, headers: { host: 'evil.example' } }, resolve).on('error', reject);
+    });
+  });
+  assert.equal(res.statusCode, 403);
+  res.resume();
+});
