@@ -8,6 +8,7 @@ import { linkToZotero as defaultLinkToZotero } from '../zotero/link.mjs';
 import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
 import { readSettings, writeSettings } from '../library/settings.mjs';
+import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
@@ -131,6 +132,7 @@ export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir, resolveItem = defaultResolveItem, md5File: md5Impl } = deps;
   const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
   const out = cfg.outputDir;
+  const detectAgents = deps.detectAgents ?? defaultDetectAgents;
   const linkToZotero = deps.linkToZotero ?? defaultLinkToZotero;
   // One folder library per server: the MD5 worker and its cache are shared by the list and the extract job.
   const library = createLibrary({ dataDir, md5: md5Impl });
@@ -179,6 +181,22 @@ export function createServer(cfg, deps = {}) {
     }
 
     if (await notesRoutes(req, res, parts, method)) return;
+
+    if (parts[1] === 'agents' && (parts.length === 2 || (parts.length === 3 && parts[2] === 'selected'))) {
+      if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
+      const selectedOf = (agents, saved) => (agents.find((a) => a.id === saved && a.available) ?? agents.find((a) => a.available))?.id ?? null;
+      if (parts.length === 2) {
+        if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
+        const agents = await detectAgents();
+        return sendJson(res, 200, { agents, selected: selectedOf(agents, (await readSettings(dataDir)).agent) });
+      }
+      if (method !== 'PUT') throw new HttpError(405, '허용되지 않는 메서드입니다.');
+      const body = await readBody(req);
+      const agents = await detectAgents();
+      if (!agents.some((a) => a.id === body?.agent && a.available)) throw new HttpError(400, '이 AI 도구는 지금 쓸 수 없습니다.');
+      await writeSettings(dataDir, { agent: body.agent });
+      return sendJson(res, 200, { agents, selected: body.agent });
+    }
 
     if (parts[1] === 'library' && parts[2] === 'folders' && parts.length === 3) {
       if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');

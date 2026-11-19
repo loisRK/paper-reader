@@ -737,3 +737,35 @@ test('paper list: a hung Zotero does not wedge background linking', async (t) =>
   await new Promise((r) => setTimeout(r, 50));
   assert.equal(fetches, 2);
 });
+
+test('agents API: list with selection, default first available, PUT validation and 415', async (t) => {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-agents-'));
+  const dataDir = path.join(tmp, 'data');
+  const detectAgents = async () => [
+    { id: 'claude', name: 'Claude Code', available: true, version: '2.1.0' },
+    { id: 'codex', name: 'Codex', available: false, message: '설치되어 있지 않습니다' },
+  ];
+  const s = createServer({ outputDir: tmp, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { detectAgents });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await fs.rm(tmp, { recursive: true, force: true }); });
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const pj = (body, headers = { 'content-type': 'application/json' }) => fetch(`${b}/api/agents/selected`, { method: 'PUT', headers, body: JSON.stringify(body) });
+  const g = await (await fetch(`${b}/api/agents`)).json();
+  assert.equal(g.agents.length, 2);
+  assert.equal(g.selected, 'claude');
+  assert.equal((await pj({ agent: 'claude' }, { 'content-type': 'text/plain' })).status, 415);
+  const bad = await pj({ agent: 'codex' });
+  assert.equal(bad.status, 400);
+  assert.equal((await bad.json()).error, '이 AI 도구는 지금 쓸 수 없습니다.');
+  assert.equal((await pj({ agent: 'gpt' })).status, 400);
+  assert.equal((await pj({ agent: 'claude' })).status, 200);
+  assert.equal((await (await fetch(`${b}/api/agents`)).json()).selected, 'claude');
+  assert.equal((await fetch(`${b}/api/agents`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: '{}' })).status, 405);
+  // folders PUT keeps the agent
+  const f = await fetch(`${b}/api/library/folders`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ folders: [tmp] }) });
+  assert.equal(f.status, 200);
+  assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'settings.json'), 'utf8')).agent, 'claude');
+  // a saved selection that became unavailable falls back to the first available tool
+  await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [], agent: 'codex' }));
+  assert.equal((await (await fetch(`${b}/api/agents`)).json()).selected, 'claude');
+});

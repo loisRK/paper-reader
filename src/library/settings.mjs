@@ -3,6 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 export const MAX_FOLDERS = 10;
+export const AGENT_IDS = ['claude', 'codex'];
 
 export class SettingsError extends Error {
   constructor(message) {
@@ -17,7 +18,7 @@ export async function readSettings(dataDir) {
   try {
     const v = JSON.parse(await fs.readFile(settingsFile(dataDir), 'utf8'));
     const folders = Array.isArray(v?.folders) ? v.folders.filter((f) => typeof f === 'string') : [];
-    return { folders };
+    return AGENT_IDS.includes(v?.agent) ? { folders, agent: v.agent } : { folders };
   } catch {
     return { folders: [] };
   }
@@ -48,11 +49,17 @@ export async function validateFolders(folders, saved = []) {
   return out;
 }
 
-export async function writeSettings(dataDir, { folders }) {
-  const clean = await validateFolders(folders, (await readSettings(dataDir)).folders);
+// Fields left undefined keep their saved value, so saving folders never drops `agent` and vice versa.
+export async function writeSettings(dataDir, { folders, agent } = {}) {
+  const saved = await readSettings(dataDir);
+  const next = { folders: folders === undefined ? saved.folders : await validateFolders(folders, saved.folders) };
+  if (agent !== undefined) {
+    if (!AGENT_IDS.includes(agent)) throw new SettingsError('알 수 없는 AI 도구입니다.');
+    next.agent = agent;
+  } else if (saved.agent) next.agent = saved.agent;
   const file = settingsFile(dataDir);
   await fs.mkdir(dataDir, { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify({ folders: clean }, null, 2));
+  await fs.writeFile(tmp, JSON.stringify(next, null, 2));
   await fs.rename(tmp, file);
 }
