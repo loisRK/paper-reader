@@ -32,6 +32,30 @@ export function pagesToDraw(visible, numPages) {
   return new Set([...out].sort((a, b) => a - b));
 }
 
+const HANGUL = /[\uac00-\ud7a3]/;
+const named = (name, message, extra) => Object.assign(new Error(message), { name }, extra);
+
+// Why a PDF could not be opened, as a short Korean sentence for the UI. Raw PDF.js / browser
+// messages are English, so they are never shown (the caller logs the original to the console).
+// Errors made here: PdfjsLoadError (PDF.js module import failed), PdfNetworkError (fetch threw),
+// PdfServerError { status, serverMessage } (/pdf answered non-2xx).
+export function pdfErrorMessage(err) {
+  const name = err?.name;
+  if (name === 'PdfServerError') {
+    // The server's 4xx reasons are written in Korean; a 5xx carries the raw exception text.
+    if (err.status < 500 && HANGUL.test(err.serverMessage ?? '')) return err.serverMessage;
+    if (err.status === 404) return 'PDF 파일을 찾을 수 없습니다.';
+    return 'PDF를 받아 오지 못했습니다. 서버 오류입니다.';
+  }
+  if (name === 'PdfNetworkError') return '서버에 연결하지 못했습니다. 리더 서버가 켜져 있는지 확인하세요.';
+  if (name === 'PdfjsLoadError') return 'PDF 보기 프로그램(PDF.js)을 불러오지 못했습니다. 새로고침해 보세요.';
+  if (name === 'InvalidPDFException' || name === 'FormatError') return 'PDF 파일이 손상되었거나 올바른 PDF가 아닙니다.';
+  if (name === 'PasswordException') return '암호가 걸린 PDF는 열 수 없습니다.';
+  if (name === 'MissingPDFException' || (name === 'ResponseException' && (err.missing || err.status === 404))) return 'PDF 파일을 찾을 수 없습니다.';
+  if (name === 'ResponseException' || name === 'UnexpectedResponseException') return 'PDF를 받아 오지 못했습니다.';
+  return 'PDF를 여는 중 알 수 없는 오류가 났습니다.';
+}
+
 // ---------- view ----------
 
 let pdfjsPromise = null;
@@ -39,23 +63,103 @@ function loadPdfjs() {
   pdfjsPromise ??= import(`${VENDOR}pdf.min.mjs`).then((m) => {
     m.GlobalWorkerOptions.workerSrc = `${VENDOR}pdf.worker.min.mjs`;
     return m;
-  }).catch((e) => { pdfjsPromise = null; throw e; });
+  }).catch((e) => { pdfjsPromise = null; throw named('PdfjsLoadError', 'PDF.js import failed', { cause: e }); });
   return pdfjsPromise;
 }
 
 async function fetchPdf(paperId) {
-  const res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/pdf`);
+  let res;
+  try {
+    res = await fetch(`/api/papers/${encodeURIComponent(paperId)}/pdf`);
+  } catch (e) {
+    throw named('PdfNetworkError', 'PDF fetch failed', { cause: e });
+  }
   if (!res.ok) {
     const j = await res.json().catch(() => null);
-    throw new Error(j?.error || `서버 응답 ${res.status}`);
+    throw named('PdfServerError', `HTTP ${res.status}`, { status: res.status, serverMessage: typeof j?.error === 'string' ? j.error : '' });
   }
-  return new Uint8Array(await res.arrayBuffer());
+  try {
+    return new Uint8Array(await res.arrayBuffer());
+  } catch (e) {
+    throw named('PdfNetworkError', 'PDF body read failed', { cause: e });
+  }
+}
+
+// Drag selection on the text layers, as PDF.js's TextLayerBuilder (6.5.438, pdf_viewer.mjs) does it:
+// each layer ends with div.endOfContent; while a layer is being selected it gets .selecting, which
+// stretches endOfContent over the whole layer (pdf_viewer.css), so the pointer over empty space
+// (column gap, line ends, margins) hits that div instead of the layer itself — otherwise the browser
+// snaps the selection end to the layer's start/end and the selection jumps across the page. In
+// non-Firefox browsers endOfContent is also moved next to the selection's moving end, which limits
+// a jump to at most the one span being modified. layers: () => [[textLayerDiv, endDiv], ...].
+// Returns the abort() that removes every listener.
+function bindTextSelection(layers) {
+  const ac = new AbortController();
+  const { signal } = ac;
+  const reset = (end, layer) => {
+    if (end.parentNode) layer.append(end); // only for a drawn layer (release() empties it)
+    end.style.width = '';
+    end.style.height = '';
+    end.style.userSelect = '';
+    layer.classList.remove('selecting');
+  };
+  const resetAll = () => { for (const [layer, end] of layers()) reset(end, layer); };
+  let pointerDown = false;
+  let prevRange = null;
+  let isFirefox = null;
+  document.addEventListener('pointerdown', (e) => {
+    pointerDown = true;
+    const layer = e.target instanceof Element ? e.target.closest('.textLayer') : null;
+    if (layer && layers().some(([l]) => l === layer)) layer.classList.add('selecting');
+  }, { signal, capture: true });
+  document.addEventListener('pointerup', () => { pointerDown = false; resetAll(); }, { signal });
+  window.addEventListener('blur', () => { pointerDown = false; resetAll(); }, { signal });
+  document.addEventListener('keyup', () => { if (!pointerDown) resetAll(); }, { signal });
+  document.addEventListener('selectionchange', () => {
+    const all = layers();
+    if (!all.length) return;
+    const selection = document.getSelection();
+    if (!selection || selection.rangeCount === 0) { resetAll(); prevRange = null; return; }
+    const active = new Set();
+    for (let i = 0; i < selection.rangeCount; i++) {
+      const range = selection.getRangeAt(i);
+      for (const [layer] of all) if (!active.has(layer) && range.intersectsNode(layer)) active.add(layer);
+    }
+    for (const [layer, end] of all) {
+      if (active.has(layer)) layer.classList.add('selecting');
+      else reset(end, layer);
+    }
+    isFirefox ??= typeof CSS !== 'undefined' && CSS.supports('-moz-user-select', 'none');
+    if (isFirefox) return;
+    const range = selection.getRangeAt(0);
+    const modifyStart = prevRange && (range.compareBoundaryPoints(Range.END_TO_END, prevRange) === 0
+      || range.compareBoundaryPoints(Range.START_TO_END, prevRange) === 0);
+    let anchor = modifyStart ? range.startContainer : range.endContainer;
+    if (anchor.nodeType === Node.TEXT_NODE) anchor = anchor.parentNode;
+    if (!modifyStart && range.endOffset === 0) {
+      do {
+        while (anchor && !anchor.previousSibling) anchor = anchor.parentNode;
+        anchor = anchor?.previousSibling;
+      } while (anchor && !anchor.childNodes.length);
+    }
+    const layer = anchor?.parentElement?.closest('.textLayer');
+    const end = layer && all.find(([l]) => l === layer)?.[1];
+    if (end?.parentNode) {
+      end.style.width = layer.style.width;
+      end.style.height = layer.style.height;
+      end.style.userSelect = 'text';
+      anchor.parentElement.insertBefore(end, modifyStart ? anchor : anchor.nextSibling);
+    }
+    prevRange = range.cloneRange();
+  }, { signal });
+  return () => ac.abort();
 }
 
 const reduceMotion = () => matchMedia('(prefers-reduced-motion: reduce)').matches;
 
 // container: an empty element the view fills (toolbar + scrolling pages).
-// onError(err): document could not be opened (err.message is a Korean reason).
+// onError(err): document could not be opened (err.message is a Korean reason; the original
+// error is logged to the console and kept as err.cause).
 export function createPdfView({ paperId, source, container, onError }) {
   const sentences = source?.sentences ?? {};
   const st = {
@@ -63,7 +167,7 @@ export function createPdfView({ paperId, source, container, onError }) {
     pdf: null,
     task: null, // PDF.js loading task (PDFDocumentProxy has no destroy() in 6.x)
     pdfjs: null,
-    pages: [], // index page-1 -> { num, proxy, el, canvas, marks, text, viewport, drawn, task, textTask }
+    pages: [], // index page-1 -> { num, proxy, el, canvas, marks, text, end, viewport, drawn, task, textTask }
     zoom: 1,
     fit: true,
     visible: new Set(),
@@ -147,6 +251,7 @@ export function createPdfView({ paperId, source, container, onError }) {
     p.textTask = textTask;
     try {
       await Promise.all([task.promise, textTask.render()]);
+      if (p.textTask === textTask) p.text.append(p.end);
       if (p.task === task) p.el.classList.add('is-drawn');
     } catch (e) {
       if (e?.name !== 'RenderingCancelledException' && e?.name !== 'AbortException' && !st.disposed) {
@@ -172,6 +277,7 @@ export function createPdfView({ paperId, source, container, onError }) {
 
   let io = null;
   let ro = null;
+  const unbindSelection = bindTextSelection(() => st.pages.map((p) => [p.text, p.end]));
 
   // ----- marks / evidence / flash -----
   const sentRects = (sid) => {
@@ -308,6 +414,7 @@ export function createPdfView({ paperId, source, container, onError }) {
     clearTimeout(st.flashTimer);
     io?.disconnect();
     ro?.disconnect();
+    unbindSelection();
     for (const p of st.pages) release(p);
     st.task?.destroy().catch(() => {});
     container.replaceChildren();
@@ -334,8 +441,9 @@ export function createPdfView({ paperId, source, container, onError }) {
       const canvas = el('canvas', { 'aria-hidden': 'true', width: 0, height: 0 });
       const marks = el('div', { class: 'pdf-marks', 'aria-hidden': 'true' });
       const text = el('div', { class: 'textLayer' });
+      const end = el('div', { class: 'endOfContent' });
       const node = el('div', { class: 'pdf-page', dataset: { page: String(i + 1) }, 'aria-label': `${i + 1}쪽` }, canvas, marks, text);
-      return { num: i + 1, proxy, el: node, canvas, marks, text, viewport: null, drawn: false, task: null, textTask: null };
+      return { num: i + 1, proxy, el: node, canvas, marks, text, end, viewport: null, drawn: false, task: null, textTask: null };
     });
     status.remove();
     pagesEl.replaceChildren(...st.pages.map((p) => p.el));
@@ -382,7 +490,8 @@ export function createPdfView({ paperId, source, container, onError }) {
   ready.catch((e) => {
     if (st.disposed) return;
     status.textContent = '';
-    onError?.(e instanceof Error ? e : new Error(String(e)));
+    console.error('PDF를 열지 못했습니다:', e);
+    onError?.(Object.assign(new Error(pdfErrorMessage(e)), { cause: e }));
   });
 
   return { ready, scrollToSentences, scrollToPage, setMarks, setEvidence, zoom, pageLayer, dispose };

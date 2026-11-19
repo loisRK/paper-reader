@@ -2,7 +2,7 @@ import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
 import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
-import { nextZoom, pagesToDraw } from '../src/reader/public/views/pdf-view.js';
+import { nextZoom, pagesToDraw, pdfErrorMessage } from '../src/reader/public/views/pdf-view.js';
 import { progressPercent } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
@@ -403,6 +403,33 @@ test('pagesToDraw: 보이는 쪽 ±1, 1..쪽 수 안', () => {
   assert.deepEqual([...pagesToDraw([4, 5], 10)], [3, 4, 5, 6]);
   assert.deepEqual([...pagesToDraw([10], 10)], [9, 10]);
   assert.deepEqual([...pagesToDraw([], 10)], []);
+});
+
+test('pdfErrorMessage: 알려진 오류는 짧은 한국어, 영어 원문은 화면에 내보내지 않는다', () => {
+  const e = (name, message, extra = {}) => Object.assign(new Error(message), { name }, extra);
+  const hangul = /[\uac00-\ud7a3]/;
+  const cases = [
+    [e('InvalidPDFException', 'Invalid PDF structure.'), 'PDF 파일이 손상되었거나 올바른 PDF가 아닙니다.'],
+    [e('FormatError', 'Bad FCHECK in flate stream'), 'PDF 파일이 손상되었거나 올바른 PDF가 아닙니다.'],
+    [e('MissingPDFException', 'Missing PDF "x.pdf".'), 'PDF 파일을 찾을 수 없습니다.'],
+    [e('ResponseException', 'Unexpected server response (404)', { status: 404, missing: true }), 'PDF 파일을 찾을 수 없습니다.'],
+    [e('ResponseException', 'Unexpected server response (500)', { status: 500, missing: false }), 'PDF를 받아 오지 못했습니다.'],
+    [e('PasswordException', 'No password given', { code: 1 }), '암호가 걸린 PDF는 열 수 없습니다.'],
+    [e('PdfjsLoadError', 'PDF.js import failed', { cause: new TypeError('Failed to fetch dynamically imported module: http://x/pdf.min.mjs') }), 'PDF 보기 프로그램(PDF.js)을 불러오지 못했습니다. 새로고침해 보세요.'],
+    [e('PdfNetworkError', 'PDF fetch failed', { cause: new TypeError('Failed to fetch') }), '서버에 연결하지 못했습니다. 리더 서버가 켜져 있는지 확인하세요.'],
+    [new TypeError('Failed to fetch'), 'PDF를 여는 중 알 수 없는 오류가 났습니다.'],
+    [new Error('Worker was destroyed'), 'PDF를 여는 중 알 수 없는 오류가 났습니다.'],
+    ['not an error', 'PDF를 여는 중 알 수 없는 오류가 났습니다.'],
+    [null, 'PDF를 여는 중 알 수 없는 오류가 났습니다.'],
+  ];
+  for (const [err, want] of cases) assert.equal(pdfErrorMessage(err), want, String(err?.name ?? err));
+  // The server's own Korean 4xx reason passes through; English or 5xx text does not.
+  const notFound = 'PDF 파일을 찾을 수 없습니다. 파일이 옮겨졌다면 다시 추출하세요.';
+  assert.equal(pdfErrorMessage(e('PdfServerError', 'HTTP 404', { status: 404, serverMessage: notFound })), notFound);
+  assert.equal(pdfErrorMessage(e('PdfServerError', 'HTTP 404', { status: 404, serverMessage: 'Not Found' })), 'PDF 파일을 찾을 수 없습니다.');
+  assert.equal(pdfErrorMessage(e('PdfServerError', 'HTTP 500', { status: 500, serverMessage: '서버 오류: ENOENT: no such file' })), 'PDF를 받아 오지 못했습니다. 서버 오류입니다.');
+  assert.equal(pdfErrorMessage(e('PdfServerError', 'HTTP 502', { status: 502, serverMessage: '' })), 'PDF를 받아 오지 못했습니다. 서버 오류입니다.');
+  for (const [err] of cases) assert.ok(hangul.test(pdfErrorMessage(err)) && !/Failed|Invalid|Exception|password/i.test(pdfErrorMessage(err)));
 });
 
 // ----- PDF view: selection / marks / click (Task 5) -----
