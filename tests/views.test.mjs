@@ -180,3 +180,21 @@ test('memosVisible hides memos in 3min mode and for example papers', () => {
   assert.equal(memosVisible('3min', false), false);
   assert.equal(memosVisible('10min', true), false);
 });
+
+import { shouldApplyRemote, needsResend } from '../src/reader/public/views/card-memos.js';
+const idle = { dirty: false, failed: false, saving: 0, focused: false };
+
+test('failed save: remote ignored and resend needed', () => {
+  const st = { ...idle, failed: true };
+  assert.equal(shouldApplyRemote(st), false);
+  assert.equal(needsResend(st), true);
+});
+test('in-flight, dirty or focused: remote ignored', () => {
+  assert.equal(shouldApplyRemote({ ...idle, saving: 1 }), false);
+  assert.equal(shouldApplyRemote({ ...idle, dirty: true }), false);
+  assert.equal(shouldApplyRemote({ ...idle, focused: true }), false);
+});
+test('acknowledged: remote applied, no resend', () => {
+  assert.equal(shouldApplyRemote(idle), true);
+  assert.equal(needsResend(idle), false);
+});

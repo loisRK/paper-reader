@@ -24,58 +24,82 @@ export function debounce(fn, ms, { setTimeout: st, clearTimeout: ct } = globalTh
 // Memos are for 10-minute mode, and never for bundled example papers (writes are 403).
 export const memosVisible = (mode, example) => mode === '10min' && !example;
 
+// Local text wins over polled text while it is unsent, failed, in flight, or being typed.
+export const shouldApplyRemote = ({ dirty, failed, saving, focused }) => !(dirty || failed || saving > 0 || focused);
+// A card whose latest text the server has not acknowledged must be sent again.
+export const needsResend = ({ dirty, failed }) => Boolean(dirty || failed);
+
 // Returns { bannerNode, memoNode(cardId), reset(), update(notes), dispose() }.
 export function setupCardMemos({ id, actions, example = false, getMode, refresh }) {
-  const text = new Map();   // cardId -> latest known text (local edits win over polls)
-  const areas = new Map();  // cardId -> { area, status, details, d, dirty, saving }
+  // Per-card state survives reset() (re-render) so unsent text is never lost.
+  const cards = new Map();
   let disposed = false;
   const bannerNode = el('div', { class: 'memo-conflict-slot' });
 
-  const entryStatus = (e, label) => { e.status.textContent = label; };
+  const label = (st, t) => { if (st.status) st.status.textContent = t; };
 
-  async function save(cardId, e) {
-    const value = e.area.value;
-    e.saving += 1;
-    entryStatus(e, '저장 중…');
+  function stateOf(cardId) {
+    let st = cards.get(cardId);
+    if (!st) {
+      st = { text: '', dirty: false, failed: false, saving: 0, chain: Promise.resolve(), area: null, status: null, details: null };
+      st.d = debounce(() => enqueue(cardId, st), SAVE_MS);
+      cards.set(cardId, st);
+    }
+    return st;
+  }
+
+  // Sequential saves per card; a queued save with nothing left to send is skipped.
+  function enqueue(cardId, st) {
+    st.chain = st.chain.then(() => save(cardId, st));
+  }
+
+  async function save(cardId, st) {
+    if (!needsResend(st)) return;
+    const value = st.text;
+    st.saving += 1;
+    label(st, '저장 중…');
     try {
       await actions.saveCardMemo(id, cardId, value);
-      e.failed = false;
-      if (e.area.value === value) { e.dirty = false; entryStatus(e, '저장됨'); }
+      st.failed = false;
+      if (st.text === value) { st.dirty = false; label(st, '저장됨'); }
     } catch (err) {
-      e.failed = true;
-      entryStatus(e, '저장 실패');
+      st.failed = true;
+      label(st, '저장 실패');
       actions.toast(`메모를 저장하지 못했습니다: ${err.message}`);
     } finally {
-      e.saving -= 1;
+      st.saving -= 1;
     }
+  }
+
+  // Send now when unacknowledged (pending timer, or a failed attempt).
+  function resend(cardId, st) {
+    if (!needsResend(st)) return;
+    st.d.cancel();
+    enqueue(cardId, st);
   }
 
   function memoNode(cardId) {
     if (!memosVisible(getMode(), example)) return null;
+    const st = stateOf(cardId);
     const area = el('textarea', {
       rows: 3, maxlength: MEMO_MAX, placeholder: '이 카드에 대한 내 메모', 'aria-label': '카드 메모',
     });
-    area.value = text.get(cardId) ?? '';
-    const status = el('span', { class: 'memo-status muted', role: 'status' });
-    const e = { area, status, dirty: false, saving: 0, failed: false, d: null, details: null };
-    // Sequential saves per card: wait for an in-flight one so older text can't land last.
-    let chain = Promise.resolve();
-    e.d = debounce(() => { chain = chain.then(() => save(cardId, e)); }, SAVE_MS);
+    area.value = st.text;
+    st.area = area;
+    st.status = el('span', { class: 'memo-status muted', role: 'status' });
+    label(st, st.failed ? '저장 실패' : st.dirty || st.saving ? '저장 중…' : '');
     area.addEventListener('input', () => {
-      text.set(cardId, area.value);
-      e.dirty = true;
-      entryStatus(e, '저장 중…');
-      e.d();
+      st.text = area.value;
+      st.dirty = true;
+      label(st, '저장 중…');
+      st.d();
     });
-    area.addEventListener('blur', () => e.d.flush());
-    e.details = el('details', { class: 'card-memo', open: area.value !== '' },
-      el('summary', { text: '📝 내 메모' }), area, status);
-    e.details.addEventListener('click', (ev) => ev.stopPropagation());
-    areas.set(cardId, e);
-    return e.details;
+    area.addEventListener('blur', () => resend(cardId, st));
+    st.details = el('details', { class: 'card-memo', open: area.value !== '' },
+      el('summary', { text: '📝 내 메모' }), area, st.status);
+    st.details.addEventListener('click', (ev) => ev.stopPropagation());
+    return st.details;
   }
-
-  const busy = (e) => e.dirty || e.saving > 0 || document.activeElement === e.area;
 
   function renderConflict(notes) {
     const conflict = notes?.note?.conflict;
@@ -94,36 +118,45 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
         el('button', { type: 'button', class: 'btn btn-quiet', text: 'Zotero 내용 유지', onclick: () => resolve('keep-zotero') }))));
   }
 
+  function apply(st, value) {
+    st.text = value;
+    if (st.area && st.area.value !== value) st.area.value = value;
+    if (st.details && value !== '') st.details.open = true;
+  }
+
+  const flushAll = () => { for (const [cardId, st] of cards) resend(cardId, st); };
+  const onHide = () => flushAll();
+  window.addEventListener('pagehide', onHide);
+
   return {
     bannerNode,
     memoNode,
-    // Called before the card list is rebuilt: send pending text and forget the old textareas.
+    // Called before the card list is rebuilt: send unacknowledged text, drop DOM refs only.
     reset() {
-      for (const e of areas.values()) e.d.flush();
-      areas.clear();
+      flushAll();
+      for (const st of cards.values()) { st.area = null; st.status = null; st.details = null; }
     },
     update(notes) {
       if (disposed) return;
       renderConflict(notes);
       const memos = notes?.cardMemos ?? {};
       for (const [cardId, value] of Object.entries(memos)) {
-        const e = areas.get(cardId);
-        if (!e) { text.set(cardId, value); continue; }
-        if (busy(e)) continue;
-        text.set(cardId, value);
-        if (e.area.value !== value) e.area.value = value;
-        if (value !== '') e.details.open = true;
+        const st = stateOf(cardId);
+        if (shouldApplyRemote({ ...st, focused: st.area !== null && document.activeElement === st.area })) apply(st, value);
       }
-      // A memo deleted elsewhere clears the textarea (unless being edited).
-      for (const [cardId, e] of areas) {
-        if (cardId in memos || busy(e) || e.area.value === '') continue;
-        text.set(cardId, '');
-        e.area.value = '';
+      for (const [cardId, st] of cards) {
+        if (cardId in memos || st.text === '') continue;
+        if (shouldApplyRemote({ ...st, focused: st.area !== null && document.activeElement === st.area })) apply(st, '');
+      }
+      // Zotero is reachable again: retry failed cards (at most once per poll).
+      if (notes?.status === 'connected') {
+        for (const [cardId, st] of cards) if (st.failed && !st.saving) resend(cardId, st);
       }
     },
     dispose() {
-      for (const e of areas.values()) e.d.flush();
+      flushAll();
       disposed = true;
+      window.removeEventListener('pagehide', onHide);
     },
   };
 }
