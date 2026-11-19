@@ -158,3 +158,36 @@ test('missing zotero keys give null links', async () => {
   const body = await (await fetch(`${base}/api/papers/p3`)).json();
   assert.deepEqual(body.links, { zoteroPdf: null, zoteroItem: null });
 });
+
+test('Korean search slug round-trips: runSearch file → list → read → register', async () => {
+  const { runSearch } = await import('../src/search/run.mjs');
+  const { DEFAULTS } = await import('../src/config.mjs');
+  const kdir = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-ko-'));
+  const cfg = { ...structuredClone(DEFAULTS), outputDir: kdir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } };
+  const work = { openalexId: 'W1', doi: '10.1/k', title: 'K', abstract: '', authors: ['A B'], journal: 'J', issn: [], publicationDate: '2026-01-10', citedBy: 3, countsByYear: [{ year: 2026, count: 3 }], topic: null, oaPdfUrl: null };
+  const r = await runSearch('이상 탐지', cfg, {
+    now: new Date('2026-11-18T00:00:00Z'),
+    search: async () => [work],
+    verify: async () => ({ ok: true, reason: null, verification: { crossrefType: 'journal-article', doiResolves: true } }),
+    metricsIndex: { sjr: new Map(), mjl: new Map() },
+  });
+  const name = path.basename(r.path, '.json');
+  assert.equal(name, '2026-11-18-이상-탐지');
+  await fs.writeFile(path.join(kdir, '_search', 'bad name!.json'), '{}');
+  const kcalls = [];
+  const ks = createServer(cfg, { fetchImpl: async (url) => { kcalls.push(url); return { status: 201 }; } });
+  await new Promise((res) => ks.listen(0, '127.0.0.1', res));
+  const kbase = `http://127.0.0.1:${ks.address().port}`;
+  try {
+    assert.deepEqual(await (await fetch(`${kbase}/api/searches`)).json(), [name]);
+    const got = await fetch(`${kbase}/api/searches/${encodeURIComponent(name)}`);
+    assert.equal(got.status, 200);
+    assert.equal((await got.json()).query, '이상 탐지');
+    const reg = await fetch(`${kbase}/api/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ search: name, n: r.papers[0].n }) });
+    assert.equal(reg.status, 200);
+    assert.equal(kcalls.length, 1);
+  } finally {
+    ks.close();
+    await fs.rm(kdir, { recursive: true, force: true });
+  }
+});

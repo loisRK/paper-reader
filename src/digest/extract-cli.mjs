@@ -5,6 +5,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { resolveItem as defaultResolveItem } from '../zotero/local.mjs';
+import { isSafeName } from '../reader/store.mjs';
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SCRIPT = path.join(ROOT, 'extract', 'extract_pdf.py');
@@ -50,6 +51,10 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     item = await resolveItem(idOrKey, cfg, opts);
   } catch (err) {
     error(err.message);
+    return 1;
+  }
+  if (!isSafeName(item.id)) {
+    error(`이 항목 ID(${item.id})는 폴더 이름으로 쓸 수 없습니다. Zotero 항목 key로 다시 실행하세요.`);
     return 1;
   }
 

@@ -139,3 +139,17 @@ test('broken JSON output or unwritable outputDir prints a one-line error and exi
   assert.equal(unwritable, 1);
   assert.match(errors.at(-1), /^추출 결과를 저장하지 못했습니다: /);
 });
+
+test('rejects an item id that cannot be a folder name before running python', async () => {
+  const { dir, errors, opts } = await setup();
+  for (const id of ['../x', '..', 'a/b']) {
+    const code = await main(['K'], {
+      ...opts,
+      resolveItem: async () => ({ ...resolved, id }),
+      runPython: async () => assert.fail('must not run python'),
+    });
+    assert.equal(code, 1);
+    assert.equal(errors.at(-1), `이 항목 ID(${id})는 폴더 이름으로 쓸 수 없습니다. Zotero 항목 key로 다시 실행하세요.`);
+  }
+  await assert.rejects(fs.access(path.join(dir, 'x')));
+});

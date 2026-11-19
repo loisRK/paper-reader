@@ -7,7 +7,8 @@ import { fileURLToPath } from 'node:url';
 // their reading progress is stored under outputDir so the repository stays untouched.
 export const EXAMPLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'examples');
 
-export const NAME_RE = /^[\w.\-]+$/;
+// One name rule for paper ids and search names (folder/file names): letters (incl. Korean), digits, _ . -
+export const NAME_RE = /^[\p{L}\p{N}_.\-]+$/u;
 export const isSafeName = (s) => typeof s === 'string' && NAME_RE.test(s) && s !== '.' && s !== '..';
 
 export const DEFAULT_PROGRESS = { read: [], mode: '10min', focus: false };
@@ -87,7 +88,7 @@ export async function listSearches(outputDir) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
-  return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).sort().reverse();
+  return names.filter((n) => n.endsWith('.json')).map((n) => n.slice(0, -5)).filter(isSafeName).sort().reverse();
 }
 
 // Returns null when the search file does not exist.
