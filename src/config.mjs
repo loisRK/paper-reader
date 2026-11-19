@@ -43,15 +43,15 @@ export async function loadConfig(configPath = './paper-reader.config.json') {
   try {
     raw = await fs.readFile(file, 'utf8');
   } catch (err) {
-    if (err.code !== 'ENOENT') throw new Error(`Cannot read config ${file}: ${err.message}`);
+    if (err.code !== 'ENOENT') throw new Error(`${file}을(를) 읽을 수 없습니다 (${err.message})`);
   }
   if (raw !== undefined) {
     try {
       user = JSON.parse(raw);
     } catch (err) {
-      throw new Error(`Invalid JSON in config ${file}: ${err.message}`);
+      throw new Error(`${file}의 JSON 형식이 올바르지 않습니다 (${err.message})`);
     }
-    if (!isPlainObject(user)) throw new Error(`Invalid config ${file}: top level must be an object`);
+    if (!isPlainObject(user)) throw new Error(`${file}의 최상위 값은 객체여야 합니다`);
   }
 
   const config = merge(DEFAULTS, user);

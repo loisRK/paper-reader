@@ -66,3 +66,22 @@ test('registerPaper: not running and non-201', async () => {
   assert.equal(bad.ok, false);
   assert.match(bad.message, /400/);
 });
+
+test('register CLI: bad search file shape and bad config give one-line Korean errors', async () => {
+  const fs = await import('node:fs/promises');
+  const os = await import('node:os');
+  const path = await import('node:path');
+  const { main } = await import('../src/zotero/register-cli.mjs');
+  const dir = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-reg-'));
+  await fs.mkdir(path.join(dir, '_search'));
+  await fs.writeFile(path.join(dir, '_search', 's.json'), '{"query":"q"}');
+  const errors = [];
+  const opts = { cfg: { ...cfg, outputDir: dir }, error: (m) => errors.push(m), log: () => {}, fetchImpl: async () => assert.fail('no network') };
+  assert.equal(await main(['s', '1'], opts), 1);
+  assert.equal(errors.at(-1), '검색 결과 파일 형식이 올바르지 않습니다: s.json');
+
+  const configPath = path.join(dir, 'paper-reader.config.json');
+  await fs.writeFile(configPath, '{ broken');
+  assert.equal(await main(['s', '1'], { error: (m) => errors.push(m), configPath }), 1);
+  assert.match(errors.at(-1), /^설정 파일을 읽지 못했습니다: /);
+});

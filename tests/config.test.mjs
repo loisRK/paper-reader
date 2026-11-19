@@ -46,3 +46,13 @@ test('invalid JSON throws with file path in message', async () => {
   await fs.writeFile(file, '{ not json');
   await assert.rejects(loadConfig(file), /paper-reader\.config\.json/);
 });
+
+test('config errors are Korean', async () => {
+  const tmp = await tmpDir();
+  const file = path.join(tmp, 'paper-reader.config.json');
+  await fs.writeFile(file, '{ not json');
+  await assert.rejects(loadConfig(file), (e) => /JSON 형식이 올바르지 않습니다/.test(e.message) && e.message.includes(file));
+  await fs.writeFile(file, '[]');
+  await assert.rejects(loadConfig(file), /최상위 값은 객체여야 합니다/);
+  await assert.rejects(loadConfig(tmp), /읽을 수 없습니다/);
+});

@@ -25,10 +25,29 @@ async function retryDelayMs(res, attempt) {
   return 2000 * 2 ** attempt; // 2s, 4s, 8s
 }
 
+const hostOf = (url) => {
+  try {
+    return new URL(url).host;
+  } catch {
+    return String(url).split(/[?#]/)[0];
+  }
+};
+
 export async function fetchJson(url, opts = {}) {
   const { fetchImpl = globalThis.fetch, headers = {}, retries = 3, sleep = defaultSleep } = opts;
   for (let attempt = 0; ; attempt++) {
-    const res = await fetchImpl(url, { headers: { accept: 'application/json', ...headers } });
+    let res;
+    try {
+      res = await fetchImpl(url, { headers: { accept: 'application/json', ...headers } });
+    } catch (err) {
+      // fetch() rejects with TypeError on DNS/connection failures: retry like 5xx.
+      if (!(err instanceof TypeError)) throw err;
+      if (attempt >= retries) {
+        throw new Error(`서버에 연결하지 못했습니다. 네트워크 연결을 확인하세요 (${hostOf(url)})`, { cause: err });
+      }
+      await sleep(2000 * 2 ** attempt);
+      continue;
+    }
     if (res.ok) return res.json();
     const retryable = res.status === 429 || res.status >= 500;
     if (!retryable || attempt >= retries) throw new HttpError(res.status, url);

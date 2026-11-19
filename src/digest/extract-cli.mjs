@@ -44,7 +44,15 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     error(`Python 추출기 환경(.venv)이 없습니다. 저장소 루트에서 먼저 설치하세요:\n  ${VENV_INSTALL_COMMAND}`);
     return 1;
   }
-  const cfg = opts.cfg ?? await loadConfig();
+  let cfg = opts.cfg;
+  if (!cfg) {
+    try {
+      cfg = await loadConfig(opts.configPath);
+    } catch (err) {
+      error(`설정 파일을 읽지 못했습니다: ${err.message}`);
+      return 1;
+    }
+  }
 
   let item;
   try {

@@ -127,18 +127,33 @@ export function lookupMetrics(index, issns) {
 }
 
 export async function downloadSjr({ fetchImpl = globalThis.fetch, dir = './data', year = new Date().getFullYear() - 1 } = {}) {
-  const res = await fetchImpl(SJR_URL);
+  let res;
+  try {
+    res = await fetchImpl(SJR_URL);
+  } catch (err) {
+    throw new Error(`SCImago 다운로드 실패. 네트워크 연결을 확인하세요 (${new URL(SJR_URL).host})`, { cause: err });
+  }
   if (!res.ok) throw new Error(`SCImago 다운로드 실패: HTTP ${res.status}`);
+  const body = Buffer.from(await res.arrayBuffer());
+  const header = body.subarray(0, 4096).toString('utf8').split(/\r?\n/, 1)[0];
+  if (!/\bIssn\b/i.test(header)) {
+    throw new Error('SJR 파일 형식이 아닙니다(웹페이지가 내려왔을 수 있음). 브라우저에서 직접 받아 data/에 넣으세요.');
+  }
   await fs.mkdir(dir, { recursive: true });
   const file = path.resolve(dir, `scimagojr-${year}.csv`);
-  await fs.writeFile(file, Buffer.from(await res.arrayBuffer()));
+  await fs.writeFile(file, body);
   return file;
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   if (process.argv.includes('--download')) {
-    const file = await downloadSjr();
-    console.log(`저장됨: ${file}\n설정(paper-reader.config.json)에 추가:\n  "metrics": { "sjrCsv": "${file}" }`);
+    try {
+      const file = await downloadSjr();
+      console.log(`저장됨: ${file}\n설정(paper-reader.config.json)에 추가:\n  "metrics": { "sjrCsv": "${file}" }`);
+    } catch (err) {
+      console.error(err.message);
+      process.exitCode = 1;
+    }
   } else {
     console.log('사용법: node src/search/metrics.mjs --download');
   }

@@ -58,3 +58,20 @@ test('missing files yield empty index without throwing', async () => {
   const idx2 = await loadMetrics({});
   assert.deepEqual(lookupMetrics(idx2, ['0018-9448']), NULLS);
 });
+
+test('downloadSjr saves only a body whose header has Issn', async () => {
+  const { mkdtemp, readFile, readdir } = await import('node:fs/promises');
+  const os = await import('node:os');
+  const { downloadSjr } = await import('../src/search/metrics.mjs');
+  const dir = await mkdtemp(path.join(os.tmpdir(), 'pr-sjr-'));
+  const body = (t) => async () => ({ ok: true, status: 200, arrayBuffer: async () => new TextEncoder().encode(t).buffer });
+  await assert.rejects(
+    downloadSjr({ fetchImpl: body('<!DOCTYPE html><html>Just a moment...</html>'), dir, year: 2025 }),
+    { message: 'SJR 파일 형식이 아닙니다(웹페이지가 내려왔을 수 있음). 브라우저에서 직접 받아 data/에 넣으세요.' },
+  );
+  assert.deepEqual(await readdir(dir), []);
+  const csv = '﻿Rank;Sourceid;Title;Type;Issn;SJR Best Quartile\n1;2;T;journal;"00189448";Q1\n';
+  const file = await downloadSjr({ fetchImpl: body(csv), dir, year: 2025 });
+  assert.equal(path.basename(file), 'scimagojr-2025.csv');
+  assert.equal(await readFile(file, 'utf8'), csv);
+});

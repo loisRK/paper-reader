@@ -191,3 +191,16 @@ test('Korean search slug round-trips: runSearch file → list → read → regis
     await fs.rm(kdir, { recursive: true, force: true });
   }
 });
+
+test('server entry point prints a one-line Korean error and exits 1 on bad config', async () => {
+  const { execFile } = await import('node:child_process');
+  const { fileURLToPath } = await import('node:url');
+  const cwd = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-entry-'));
+  await fs.writeFile(path.join(cwd, 'paper-reader.config.json'), '{ broken');
+  const entry = fileURLToPath(new URL('../src/reader/server.mjs', import.meta.url));
+  const r = await new Promise((resolve) => execFile(process.execPath, [entry], { cwd }, (err, stdout, stderr) => resolve({ code: err?.code ?? 0, stderr })));
+  assert.equal(r.code, 1);
+  assert.match(r.stderr, /^설정 파일을 읽지 못했습니다: /);
+  assert.equal(r.stderr.trim().split('\n').length, 1);
+  await fs.rm(cwd, { recursive: true, force: true });
+});

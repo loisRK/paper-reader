@@ -60,3 +60,27 @@ test('fetchJson throws HttpError on 404 without retry', async () => {
   assert.equal(calls.length, 1);
   assert.deepEqual(sleeps, []);
 });
+
+test('network TypeError is retried like 5xx, then a Korean message with host only', async () => {
+  const calls = []; const sleeps = [];
+  const fetchImpl = async (url) => { calls.push(url); throw new TypeError('fetch failed'); };
+  await assert.rejects(
+    fetchJson('https://api.openalex.org/works?search=x&api_key=SECRET', { fetchImpl, sleep: async (ms) => { sleeps.push(ms); } }),
+    (e) => {
+      assert.match(e.message, /네트워크 연결을 확인하세요 \(api\.openalex\.org\)/);
+      assert.ok(!e.message.includes('?') && !e.message.includes('SECRET'));
+      return true;
+    },
+  );
+  assert.equal(calls.length, 4);
+  assert.deepEqual(sleeps, [2000, 4000, 8000]);
+});
+
+test('network error then success recovers', async () => {
+  let i = 0;
+  const fetchImpl = async () => {
+    if (i++ === 0) throw new TypeError('fetch failed');
+    return { status: 200, ok: true, headers: { get: () => null }, json: async () => ({ ok: 1 }) };
+  };
+  assert.deepEqual(await fetchJson('https://x.org/a', { fetchImpl, sleep: async () => {} }), { ok: 1 });
+});

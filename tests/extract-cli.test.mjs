@@ -153,3 +153,13 @@ test('rejects an item id that cannot be a folder name before running python', as
   }
   await assert.rejects(fs.access(path.join(dir, 'x')));
 });
+
+test('unreadable config gives the settings wording, not the save wording', async () => {
+  const { dir, errors, opts } = await setup();
+  const configPath = path.join(dir, 'paper-reader.config.json');
+  await fs.writeFile(configPath, '{ broken');
+  const { cfg, ...rest } = opts;
+  const code = await main(['K'], { ...rest, configPath, resolveItem: async () => assert.fail('no resolve') });
+  assert.equal(code, 1);
+  assert.match(errors.at(-1), /^설정 파일을 읽지 못했습니다: /);
+});

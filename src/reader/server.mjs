@@ -193,8 +193,20 @@ export function createServer(cfg, deps = {}) {
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
-  const cfg = await loadConfig();
-  const server = createServer(cfg);
+  let cfg;
+  try {
+    cfg = await loadConfig();
+  } catch (err) {
+    console.error(`설정 파일을 읽지 못했습니다: ${String(err.message).split('\n')[0]}`);
+    process.exit(1);
+  }
+  let server;
+  try {
+    server = createServer(cfg);
+  } catch (err) {
+    console.error(`읽기 앱을 시작하지 못했습니다: ${String(err.message).split('\n')[0]}`);
+    process.exit(1);
+  }
   server.on('error', (err) => {
     if (err.code === 'EADDRINUSE') console.error(`포트 ${cfg.reader.port}가 사용 중입니다. 설정 reader.port를 바꾸세요.`);
     else console.error(err.message);
