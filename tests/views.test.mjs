@@ -81,3 +81,39 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
   assert.deepEqual(cardEvidence(card, '10min'), ['p1-s1', 'p8-s6']);
   assert.deepEqual(cardEvidence(card, '3min'), []);
 });
+
+// ---------- notes (Task 6) ----------
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS } from '../src/reader/public/views/notes.js';
+import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
+
+test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
+  const order = ['a-s1', 'a-s2', 'a-s3', 'a-s4'];
+  assert.deepEqual(selectionSentenceIds(order, 'a-s2', 'a-s4'), ['a-s2', 'a-s3', 'a-s4']);
+  assert.deepEqual(selectionSentenceIds(order, 'a-s4', 'a-s2'), ['a-s2', 'a-s3', 'a-s4']);
+  assert.deepEqual(selectionSentenceIds(order, 'a-s3', 'a-s3'), ['a-s3']);
+  assert.deepEqual(selectionSentenceIds(order, 'a-s1', 'nope'), []);
+});
+
+test('sentenceMarks: mine and zotero marks on same sentence both kept', () => {
+  const marks = sentenceMarks({
+    highlights: [{ id: 'h1', sentenceIds: ['s1', 's2'], color: '#ffd400', comment: 'hi' }],
+    zoteroAnnotations: [{ key: 'K1', sentenceIds: ['s2'], text: 't', comment: 'z', color: '#ff6666' }],
+  });
+  assert.deepEqual(marks.get('s1'), [{ kind: 'mine', color: '#ffd400', comment: 'hi', hid: 'h1' }]);
+  assert.deepEqual(marks.get('s2').map((m) => m.kind), ['mine', 'zotero']);
+  assert.equal(marks.get('s2')[1].key, 'K1');
+  assert.equal(sentenceMarks({}).size, 0);
+});
+
+test('statusText: per status', () => {
+  assert.equal(statusText('connected', 0), 'Zotero 연결됨');
+  assert.equal(statusText('offline', 2), 'Zotero 연결 대기 중 (보낼 메모 2개)');
+  assert.equal(statusText('needs-auth', 0), 'Zotero 쓰기 허용이 필요합니다');
+  assert.equal(statusText('denied', 0), 'Zotero 쓰기 허용이 필요합니다');
+  assert.equal(statusText('rate-limited', 0), 'Zotero 허용 요청이 많아 잠시 후 다시 시도합니다');
+  assert.equal(statusText('readonly', 0), 'Zotero 10 이상에서만 메모를 Zotero로 보낼 수 있습니다. 메모는 이 컴퓨터에 저장됩니다.');
+});
+
+test('NOTE_COLORS matches ZOTERO_COLORS (source of truth)', () => {
+  assert.deepEqual(Object.fromEntries(NOTE_COLORS.map((c) => [c.name, c.value])), ZOTERO_COLORS);
+});

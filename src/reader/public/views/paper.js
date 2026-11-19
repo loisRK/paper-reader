@@ -1,4 +1,5 @@
 import { el, clear, progressBar } from './dom.js';
+import { setupNotes } from './notes.js';
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
@@ -339,6 +340,11 @@ export function render(container, data, actions) {
   }
   renderModeGroup();
 
+  const notesCtl = actions.notes
+    ? setupNotes({ id: data.id, source, panel: source_, actions })
+    : null;
+  const notesStatus = notesCtl?.statusNode ?? null;
+
   const tk = digest?.takeaway;
   const topbar = el('header', { class: 'topbar' },
     el('div', { class: 'topbar-row' },
@@ -353,6 +359,7 @@ export function render(container, data, actions) {
       tk.why ? el('p', { class: 'takeaway-why', text: tk.why }) : null,
     ) : null,
     cards.length ? progressSlot : null,
+    notesStatus,
   );
 
   const banner = problems.length ? el('details', { class: 'banner', role: 'status' },
@@ -370,6 +377,7 @@ export function render(container, data, actions) {
   document.addEventListener('keydown', onKey);
   return () => {
     observer?.disconnect();
+    notesCtl?.dispose();
     document.removeEventListener('keydown', onKey);
     document.body.classList.remove('paper-mode');
   };

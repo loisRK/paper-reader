@@ -37,6 +37,14 @@ const actions = {
       toast(`진행 상황을 저장하지 못했습니다: ${err.message}`);
     }
   },
+  notes: (id) => api(`/api/papers/${encodeURIComponent(id)}/notes`),
+  addHighlight: (id, body) => api(`/api/papers/${encodeURIComponent(id)}/highlights`, sendJson('POST', body)),
+  updateHighlight: (id, hid, body) => api(`/api/papers/${encodeURIComponent(id)}/highlights/${encodeURIComponent(hid)}`, sendJson('PUT', body)),
+  removeHighlight: (id, hid) => api(`/api/papers/${encodeURIComponent(id)}/highlights/${encodeURIComponent(hid)}`, { method: 'DELETE' }),
+  // Body must be JSON ({}): the server rejects empty bodies. Never throws.
+  async authorize() {
+    try { return await api('/api/zotero/authorize', sendJson('POST', {})); } catch (err) { return { ok: false, status: 'offline', error: err.message }; }
+  },
   // Resolves true only when Zotero accepted the item.
   async register(search, n) {
     try {
