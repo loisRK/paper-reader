@@ -102,7 +102,7 @@ test('unknown section adds a problem but keeps the card', () => {
 test('garbage input returns empty digest with problem, no throw', () => {
   for (const bad of ['oops', null, undefined, 42, [], { cards: 'x' }]) {
     const { digest, problems } = validateDigest(bad, source);
-    assert.deepEqual(digest, { version: 1, paperId: 'paper1', takeaway: null, cards: [], glossary: [] });
+    assert.deepEqual(digest, { version: 1, paperId: 'paper1', paperKind: 'empirical', takeaway: null, cards: [], glossary: [] });
     assert.deepEqual(problems, ['digest.json 형식이 올바르지 않습니다']);
   }
 });
@@ -313,4 +313,54 @@ test('an old digest with opinions (AIOpsLab-like) opens with opinions removed an
   assert.equal(problems.length, 8);
   assert.equal(problems[0], 'c1: 해석·의견 항목은 쓰지 않습니다 – 의견 1');
   assert.equal(problems[7], 'c4: 해석·의견 항목은 쓰지 않습니다 – 의견 8');
+});
+
+// --- paperKind: papers without experiments (Ruling I-1) ---
+
+const withoutSections = (dig, drop) => ({ ...dig, cards: dig.cards.filter((c) => !drop.includes(c.section)).concat(
+  dig.cards.filter((c) => c.section === 'method').map((c, i) => ({ ...c, id: `x${i}` })),
+) });
+
+test('a non-empirical digest needs no setup/results cards and no result numbers', () => {
+  const full = fullDigest({ paperId: 'paper1', cards: 14 });
+  const theory = { ...withoutSections(full, ['setup', 'results']), paperKind: 'non-empirical' };
+  assert.ok(theory.cards.length >= 12);
+  const { digest, problems } = validateDigest(theory, LONG);
+  assert.deepEqual(problems, []);
+  assert.equal(digest.paperKind, 'non-empirical');
+  // results cards without numbers are fine too when the paper reports none
+  const withPlainResults = { ...full, paperKind: 'non-empirical', cards: full.cards.map((c) => (c.section === 'results' ? { ...c, bigNumbers: [] } : c)) };
+  assert.deepEqual(validateDigest(withPlainResults, LONG).problems, []);
+  // the card floor and other sections still apply
+  const thin = { ...theory, cards: theory.cards.filter((c) => c.section !== 'limits').slice(0, 10) };
+  const p = validateDigest(thin, LONG).problems;
+  assert.ok(p.includes('카드가 10장입니다 – 논문 전체를 담도록 12장 이상 쓰세요'), p.join('\n'));
+  assert.ok(p.includes('빠진 섹션: limits, implications'), p.join('\n'));
+});
+
+test('an empirical digest (default or explicit) still needs setup, results and numbers', () => {
+  const full = fullDigest({ paperId: 'paper1', cards: 14 });
+  const noNumbers = { ...full, cards: full.cards.map((c) => (c.section === 'results' ? { ...c, bigNumbers: [] } : c)) };
+  for (const kind of [undefined, 'empirical']) {
+    const dig = kind ? { ...noNumbers, paperKind: kind } : noNumbers;
+    const r = validateDigest(dig, LONG);
+    assert.deepEqual(r.problems, ['결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다']);
+    assert.equal(r.digest.paperKind, 'empirical');
+  }
+  const noResults = withoutSections(full, ['setup', 'results']);
+  assert.deepEqual(validateDigest(noResults, LONG).problems, ['빠진 섹션: setup, results']);
+});
+
+test('an unknown paperKind is reported and treated as empirical', () => {
+  const full = fullDigest({ paperId: 'paper1', cards: 14 });
+  const dig = { ...withoutSections(full, ['setup', 'results']), paperKind: 'theory' };
+  const r = validateDigest(dig, LONG);
+  assert.deepEqual(r.problems, ['paperKind는 "empirical" 또는 "non-empirical"만 씁니다 – "theory"', '빠진 섹션: setup, results']);
+  assert.equal(r.digest.paperKind, 'empirical');
+});
+
+test('a card may not use the reserved id "takeaway"', () => {
+  const full = fullDigest({ paperId: 'paper1' });
+  full.cards[0].id = 'takeaway';
+  assert.ok(validateDigest(full, LONG).problems.includes('takeaway: 카드 id로 쓸 수 없습니다 – 다른 id를 쓰세요'));
 });

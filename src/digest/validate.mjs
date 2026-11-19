@@ -1,4 +1,8 @@
 export const SECTIONS = ['motivation', 'gap', 'idea', 'method', 'setup', 'results', 'analysis', 'limits', 'implications'];
+// Papers without experiments/evaluation (theory, position, qualitative) mark themselves non-empirical:
+// then setup/results are optional and the results-numbers check is skipped (prompts/digest.md 3·8절).
+export const PAPER_KINDS = ['empirical', 'non-empirical'];
+const EMPIRICAL_ONLY = ['setup', 'results'];
 
 // Coverage floor: a digest must carry the whole paper, not just the abstract (prompts/digest.md 4·7절).
 const MIN_CARDS = 12;
@@ -29,7 +33,7 @@ const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string'
 // Pure and total: never throws, never mutates `digest`.
 export function validateDigest(digest, source) {
   const paperId = source?.id;
-  const empty = { version: 1, paperId, takeaway: null, cards: [], glossary: [] };
+  const empty = { version: 1, paperId, paperKind: 'empirical', takeaway: null, cards: [], glossary: [] };
   if (!isObj(digest) || !Array.isArray(digest.cards)) {
     return { digest: empty, problems: ['digest.json 형식이 올바르지 않습니다'] };
   }
@@ -38,6 +42,10 @@ export function validateDigest(digest, source) {
   const pageCount = Array.isArray(source?.pages) ? source.pages.length : 0;
   const known = (id) => Object.hasOwn(sentences, id);
   const allKnown = (ev) => ev.length > 0 && ev.every(known);
+
+  let paperKind = 'empirical';
+  if (PAPER_KINDS.includes(digest.paperKind)) paperKind = digest.paperKind;
+  else if (digest.paperKind !== undefined) problems.push(`paperKind는 "empirical" 또는 "non-empirical"만 씁니다 – "${String(digest.paperKind).slice(0, 30)}"`);
 
   let takeaway = null;
   if (isObj(digest.takeaway)) {
@@ -69,6 +77,7 @@ export function validateDigest(digest, source) {
       taken.add(id);
     }
     used.add(id);
+    if (id === 'takeaway') problems.push('takeaway: 카드 id로 쓸 수 없습니다 – 다른 id를 쓰세요');
     const section = str(c.section);
     if (!SECTIONS.includes(section)) problems.push(`${id}: 알 수 없는 section "${section}"`);
     const head = (t) => str(t).slice(0, 30);
@@ -140,17 +149,18 @@ export function validateDigest(digest, source) {
     });
   });
 
-  problems.push(...coverageProblems(cards, source));
+  problems.push(...coverageProblems(cards, source, paperKind));
 
   const glossary = (Array.isArray(digest.glossary) ? digest.glossary : [])
     .filter(isObj)
     .map((g) => ({ term: str(g.term), definition: str(g.definition) }));
 
-  return { digest: { version: 1, paperId, takeaway, cards, glossary }, problems };
+  return { digest: { version: 1, paperId, paperKind, takeaway, cards, glossary }, problems };
 }
 
 // Whole-paper checks, reported after the per-card problems.
-function coverageProblems(cards, source) {
+function coverageProblems(cards, source, paperKind) {
+  const empirical = paperKind !== 'non-empirical';
   const problems = [];
   for (const c of cards) {
     if (sentenceCount(c.explain) < EXPLAIN_MIN_SENTENCES) problems.push(`${c.id}: explain(해설)을 2~4문장으로 쓰세요`);
@@ -158,10 +168,10 @@ function coverageProblems(cards, source) {
   const min = minCards(source);
   if (cards.length < min) problems.push(`카드가 ${cards.length}장입니다 – 논문 전체를 담도록 ${min}장 이상 쓰세요`);
   const present = new Set(cards.map((c) => c.section));
-  const missing = SECTIONS.filter((s) => !present.has(s));
+  const missing = SECTIONS.filter((s) => !present.has(s) && (empirical || !EMPIRICAL_ONLY.includes(s)));
   if (missing.length) problems.push(`빠진 섹션: ${missing.join(', ')}`);
   const results = cards.filter((c) => c.section === 'results');
-  if (results.length && !results.some((c) => c.bigNumbers.length || c.tables.length)) {
+  if (empirical && results.length && !results.some((c) => c.bigNumbers.length || c.tables.length)) {
     problems.push('결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다');
   }
   return problems;

@@ -17,6 +17,7 @@
 {
   "version": 1,
   "paperId": "<id>",
+  "paperKind": "empirical",
   "takeaway": { "text": "", "evidence": ["p1-s2"], "why": "" },
   "cards": [{
     "id": "c1",
@@ -47,8 +48,15 @@
 | 9 | 시사점 | 저자가 밝힌 향후 연구·적용 범위 + 원문에서 더 볼 곳 |
 
 - 0은 `takeaway`, 1~9는 `cards`이며 `section` 값은 순서대로 `motivation, gap, idea, method, setup, results, analysis, limits, implications`다.
-- 9개 섹션은 모두 최소 한 카드씩 쓴다. 한 섹션을 여러 카드로 나눌 수 있다. 카드 `id`는 `c1`, `c2`, … 로 고유하게 순서대로 매긴다. 중복된 id는 `npm run check`가 "카드 id 중복"으로 보고한다.
+- 9개 섹션은 모두 최소 한 카드씩 쓴다(`non-empirical` 논문은 `setup`·`results`를 빼도 된다 — 아래 "논문 종류" 참고). 한 섹션을 여러 카드로 나눌 수 있다. 카드 `id`는 `c1`, `c2`, … 로 고유하게(`takeaway`는 쓸 수 없다) 순서대로 매긴다. 중복된 id는 `npm run check`가 "카드 id 중복"으로 보고한다.
 - `section`은 `motivation|gap|idea|method|setup|results|analysis|limits|implications` 중 하나만 쓴다. 목록 밖의 값은 `npm run check`가 문제로 보고한다.
+
+### 논문 종류(`paperKind`)
+
+- 기본값은 `"empirical"`이다(생략하면 empirical). 실험·평가·측정 결과가 하나라도 있는 논문은 모두 empirical이다.
+- `"non-empirical"`은 논문에 실험·평가·측정이 **전혀 없을 때만** 쓴다. 예: 이론·증명 논문, position paper, 정량 결과가 없는 survey, 정성 연구.
+- non-empirical이면 `setup`·`results` 카드는 필수가 아니고, 결과 카드의 숫자·표 검사도 하지 않는다. 카드 수 기준과 나머지 7개 섹션은 그대로다. 저자가 정성적 결과·발견을 밝혔으면 `results` 카드에 claim으로 쓴다.
+- 원문에 수치 결과가 있는데 숫자를 옮기기 싫어서 non-empirical로 표시하면 안 된다. 반대로 empirical 논문에서 숫자가 모자란다고 원문에 없는 수치나 결과가 아닌 숫자(쪽 수, 정리 번호 등)를 넣어서도 안 된다.
 
 ## 4. 분량과 범위 — 논문 전체를 담는다
 
@@ -59,8 +67,8 @@
 - `source.json`의 `figures`에 있는 **주요 그림·표는 모두** 어느 카드의 `figures` 또는 `tables`에 연결한다.
 - 결과 표는 `tables`로 **재구성**한다(핵심 행·열만 골라도 된다). 숫자는 원문 그대로 옮긴다.
 - 분석 카드에는 저자가 설명한 실패 유형·원인을 **하나씩 `label`을 붙여** 나열한다.
-- 결과(`results`) 카드 중 적어도 하나에는 `bigNumbers`나 `tables`로 원문 수치를 넣는다.
-- 한계(`limits`) 카드에는 저자가 밝힌 한계·위협 요인만 claim으로 쓴다. 모델이 찾아낸 약점이나 비판은 쓰지 않는다.
+- 결과(`results`) 카드 중 적어도 하나에는 `bigNumbers`나 `tables`로 원문 수치를 넣는다(`non-empirical` 논문은 예외).
+- 한계(`limits`) 카드에는 저자가 밝힌 한계·위협 요인만 claim으로 쓴다. 모델이 찾아낸 약점이나 비판은 쓰지 않는다. 저자가 한계를 밝히지 않았으면 `items` 없이 `explain`에 "저자들은 한계를 따로 밝히지 않았다."와 그 카드가 앞뒤와 어떻게 이어지는지만 쓴다.
 - 시사점(`implications`) 카드에는 저자가 밝힌 향후 연구·적용 범위를 claim으로 쓰고, "원문에서 더 볼 곳"(섹션·식·그림·표를 가리키는 안내)을 `label: "원문에서 더 볼 곳"`인 claim으로 넣는다. 안내도 그 내용이 나오는 문장 ID를 근거로 단다. 모델이 만든 토론 질문은 넣지 않는다.
 
 ## 5. 카드 형식
@@ -82,7 +90,7 @@
 
 ## 7. 문장 길이
 
-`npm run check`가 검사하는 것: `takeaway` 유무, evidence(claim·bigNumbers·tables·takeaway), 표 형식, 카드 `id` 중복, `section` 값, `figures[].page` 범위, opinion 항목, 카드 수(12장, 6쪽 이하 논문은 8장 이상), 빠진 섹션, 결과 카드의 숫자·표, `explain` 문장 수, claim 길이. 아래 길이 규칙 중 "검사:"가 붙은 것만 검사하고 나머지는 권고다.
+`npm run check`가 검사하는 것: `takeaway` 유무, evidence(claim·bigNumbers·tables·takeaway), 표 형식, 카드 `id` 중복, `section` 값, `figures[].page` 범위, opinion 항목, 카드 수(12장, 6쪽 이하 논문은 8장 이상), 빠진 섹션, `paperKind` 값, 결과 카드의 숫자·표(empirical만), 카드 id `takeaway` 금지, `explain` 문장 수, claim 길이. 아래 길이 규칙 중 "검사:"가 붙은 것만 검사하고 나머지는 권고다.
 
 - `answer`: 120자 이내. 3분 모드에서는 질문과 answer만 보이므로 answer만 읽어도 흐름이 이어지게 쓴다.
 - `explain`: 2~4문장(검사: 2문장 미만이면 문제). 문장은 `.`·`!`·`?`(예: "…이다.")로 끝맺는다.
@@ -91,7 +99,7 @@
 
 ## 8. 결과 카드
 
-- 결과 카드 중 적어도 하나에는 `bigNumbers`나 `tables`가 있어야 한다(검사: 없으면 "결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다").
+- 결과 카드 중 적어도 하나에는 `bigNumbers`나 `tables`가 있어야 한다(검사: 없으면 "결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다"). `paperKind: "non-empirical"`이면 이 검사를 하지 않는다. 수치는 원문의 결과 수치만 쓴다.
 - 핵심 수치는 `bigNumbers`를 우선 사용한다(`value`는 짧게, `label`은 무엇의 수치인지, `evidence` 필수).
 - 그림·표는 `figures`에 넣는다. `page`는 `source.json`의 `figures`에 있는 page를 쓴다(1 ~ 총 페이지 수). 정수여야 한다(`figures.txt`의 `p.4`면 `4`).
 - `figures[].label`은 `source.json`의 `figures[].label`을 그대로 쓴다(예: "Figure 2", "Table 1").
