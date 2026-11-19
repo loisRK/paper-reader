@@ -7,6 +7,7 @@ import { readNotes, writeNotes, readPending, writePending, withPaper, enqueue } 
 import { toZoteroAnnotation, matchSentences, isMine, TAG } from '../zotero/annotations.mjs';
 
 const now = () => new Date().toISOString();
+const SKIP = Symbol('skip'); // handler result: keep the op queued, continue with the next one
 const TEXT_TYPES = new Set(['highlight', 'underline']);
 const STATUS_BY_CODE = {
   offline: 'offline',
@@ -104,7 +105,9 @@ function makeSync(ctx) {
       throw new Error(`Zotero 항목 생성 실패${f?.message ? `: ${f.message}` : ''}`);
     }
     ctx.wrote = true;
-    return { key, version: versionOf(ok) ?? versionOf(await writer.getItem(key)) };
+    // The key must be saved even if the version lookup fails, or the next sync duplicates it.
+    const version = versionOf(ok) ?? versionOf(await writer.getItem(key).catch(() => null));
+    return { key, version };
   }
 
   async function patch(key, version, data) {
@@ -142,7 +145,20 @@ function makeSync(ctx) {
     const t = notes.tombstones.find((x) => x.id === op.id);
     if (t) {
       const item = await writer.getItem(t.zoteroKey);
-      if (item && isMine(item)) {
+      if (item && isMine(item) && versionOf(item) !== t.zoteroVersion) {
+        // Changed in Zotero since we last saw it: do not delete, bring it back with Zotero's values.
+        const d = dataOf(item);
+        notes.highlights.push({
+          id: t.id,
+          sentenceIds: Array.isArray(t.sentenceIds) ? t.sentenceIds : matchSentences(d, source).sentenceIds,
+          color: d.annotationColor || t.color || '#ffd400',
+          comment: d.annotationComment ?? '',
+          zoteroKey: t.zoteroKey,
+          zoteroVersion: versionOf(item),
+          conflict: { mine: { deleted: true }, at: now() },
+          createdAt: t.createdAt ?? now(),
+        });
+      } else if (item && isMine(item)) {
         try {
           await writer.deleteItem(t.zoteroKey, versionOf(item));
           ctx.wrote = true;
@@ -154,23 +170,31 @@ function makeSync(ctx) {
     notes.tombstones = notes.tombstones.filter((x) => x.id !== op.id);
   }
 
+  // Zotero-side note edit: flag it and adopt Zotero's version, so an explicit overwrite won't 412.
+  const markNoteConflict = (item) => {
+    notes.note.conflict ??= { at: now() };
+    notes.note.zoteroVersion = versionOf(item);
+  };
+
   async function upsertNote() {
     const n = notes.note;
     const html = noteHtml(cards, notes.cardMemos);
     if (n.zoteroKey) {
+      if (n.conflict) return SKIP; // waits for resolveNoteConflict
       const item = await writer.getItem(n.zoteroKey);
       if (item) {
         if (!isMine(item)) return;
-        // Edited in Zotero (version moved): do not overwrite, just flag it.
         if (versionOf(item) !== n.zoteroVersion) {
-          n.conflict ??= { at: now() };
-          return;
+          markNoteConflict(item);
+          return SKIP;
         }
         try {
           n.zoteroVersion = await patch(n.zoteroKey, n.zoteroVersion, { note: html });
         } catch (err) {
           if (!is412(err)) throw err;
-          n.conflict ??= { at: now() };
+          const fresh = await writer.getItem(n.zoteroKey);
+          if (fresh) markNoteConflict(fresh);
+          return SKIP;
         }
         return;
       }
@@ -185,13 +209,15 @@ function makeSync(ctx) {
 
   const handlers = { 'upsert-highlight': upsertHighlight, 'delete-highlight': deleteHighlight, 'upsert-note': upsertNote };
 
-  // Front to back; the first failure stops the flush and stays queued.
+  // Front to back; the first failure stops the flush and stays queued. Skipped ops stay in place.
   async function flush() {
-    while (pending.ops.length) {
-      const op = pending.ops[0];
+    let i = 0;
+    while (i < pending.ops.length) {
+      const op = pending.ops[i];
       const handler = handlers[op.op];
+      let result;
       try {
-        if (handler) await handler(op);
+        if (handler) result = await handler(op);
       } catch (err) {
         if (err?.message === 'NEEDS_REEXTRACT') {
           return { status: 'connected', message: `원문을 다시 추출해야 Zotero에 보낼 수 있습니다: npm run extract -- ${ctx.id}` };
@@ -200,7 +226,8 @@ function makeSync(ctx) {
         if (status) return { status, message: err.message ?? null };
         return { status: 'connected', message: `Zotero 동기화 실패: ${err?.message ?? err}` };
       }
-      pending.ops = pending.ops.filter((o) => o !== op);
+      if (result === SKIP) i++;
+      else pending.ops = pending.ops.filter((o) => o !== op);
       await ctx.save();
     }
     return { status: 'connected', message: null };
@@ -251,7 +278,7 @@ function makeSync(ctx) {
     if (!item) {
       notes.note = { zoteroKey: null, zoteroVersion: null }; // deleted in Zotero; memos stay local
     } else if (versionOf(item) !== n.zoteroVersion) {
-      n.conflict ??= { at: now() }; // keep the old version so we never overwrite the user's edit
+      markNoteConflict(item); // upsert-note ops are held until the user resolves it
     }
     if (Number.isFinite(res.libraryVersion)) notes.libraryVersion.note = res.libraryVersion;
   }

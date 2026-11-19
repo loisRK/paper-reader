@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   readNotes, writeNotes, readPending, writePending,
-  addHighlight, updateHighlight, removeHighlight, setCardMemo,
+  addHighlight, updateHighlight, removeHighlight, setCardMemo, resolveNoteConflict,
 } from '../src/notes/store.mjs';
 import { syncPaper, noteHtml } from '../src/notes/sync.mjs';
 import { ZoteroWriteError } from '../src/zotero/write.mjs';
@@ -52,9 +52,13 @@ function fakeWriter(prefix = 'NEW') {
       items.set(key, { key, version, data: { ...data } });
       return items.get(key);
     },
+    readonly: false, // like the real writer on Zotero 7–9: reads OK, writes throw 'readonly'
     check(method) {
       calls.push(method);
       if (w.fail[method]) throw w.fail[method];
+      if (w.readonly && ['createItems', 'patchItem', 'deleteItem'].includes(method)) {
+        throw new ZoteroWriteError('readonly', 'Zotero 10 이상이 필요합니다.');
+      }
     },
     async serverId() { return SID; },
     async authorize() { throw new Error('authorize must never be called by sync'); },
@@ -437,6 +441,7 @@ test('readonly (Zotero 9) → no writes attempted, pull still works, memos kept'
   await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'm' });
   await setCardMemo(dir, ID, 'c1', 'memo');
   const w = fakeWriter();
+  w.readonly = true;
   w.put('USER0001', {
     itemType: 'annotation', parentItem: ATT, annotationType: 'highlight', annotationText: 't',
     annotationComment: '', annotationColor: '#ffd400',
@@ -491,13 +496,111 @@ test('card memos create a child note, then patch it; Zotero-side edit marks conf
   await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
   const after = await readNotes(dir, ID);
   assert.ok(after.note.conflict?.at);
+  assert.equal(after.note.zoteroVersion, n.version, 'records Zotero version so a later overwrite will not 412');
   assert.equal(after.cardMemos.c1, 'first');
   // later local memo edit must not overwrite the Zotero note
   await setCardMemo(dir, ID, 'c3', 'more');
+  const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: '' });
   const r3 = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
-  assert.equal(r3.pending, 0);
+  assert.equal(r3.status, 'connected');
+  assert.equal(r3.message, null);
+  assert.deepEqual((await readPending(dir, ID)).ops.map((o) => o.op), ['upsert-note'], 'note op stays queued, skipped');
+  assert.equal(r3.pending, 1);
   assert.equal(w.items.get(notes.note.zoteroKey).data.note, '<p>user rewrote</p>');
-  assert.equal((await readNotes(dir, ID)).cardMemos.c3, 'more');
+  const later = await readNotes(dir, ID);
+  assert.equal(later.cardMemos.c3, 'more');
+  assert.ok(later.highlights.find((x) => x.id === h.id).zoteroKey, 'ops after the skipped note op still flush');
+});
+
+async function noteConflictSetup() {
+  const dir = await tmp();
+  await setCardMemo(dir, ID, 'c1', 'mine');
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const key = (await readNotes(dir, ID)).note.zoteroKey;
+  const n = w.items.get(key);
+  n.data.note = '<p>zotero edit</p>';
+  n.version = w.bump();
+  await setCardMemo(dir, ID, 'c2', 'second');
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.ok((await readNotes(dir, ID)).note.conflict);
+  return { dir, w, key };
+}
+
+test('resolveNoteConflict overwrite → my memos are written over the Zotero note', async () => {
+  const { dir, w, key } = await noteConflictSetup();
+  await resolveNoteConflict(dir, ID, 'overwrite');
+  let notes = await readNotes(dir, ID);
+  assert.equal(notes.note.conflict, null);
+  assert.deepEqual((await readPending(dir, ID)).ops.map((o) => o.op), ['upsert-note']);
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r.pending, 0);
+  assert.equal(w.items.get(key).data.note, noteHtml(cards, { c1: 'mine', c2: 'second' }));
+  notes = await readNotes(dir, ID);
+  assert.equal(notes.note.zoteroVersion, w.items.get(key).version);
+  assert.equal(notes.note.conflict, null);
+});
+
+test('resolveNoteConflict keep-zotero → op dropped, local memos kept, next edit writes again', async () => {
+  const { dir, w, key } = await noteConflictSetup();
+  await resolveNoteConflict(dir, ID, 'keep-zotero');
+  const notes = await readNotes(dir, ID);
+  assert.equal(notes.note.conflict, null);
+  assert.deepEqual(notes.cardMemos, { c1: 'mine', c2: 'second' });
+  assert.deepEqual((await readPending(dir, ID)).ops, []);
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.items.get(key).data.note, '<p>zotero edit</p>');
+  assert.equal((await readNotes(dir, ID)).note.conflict, null, 'no new conflict without a new Zotero edit');
+  await setCardMemo(dir, ID, 'c3', 'third');
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.items.get(key).data.note, noteHtml(cards, { c1: 'mine', c2: 'second', c3: 'third' }));
+  await assert.rejects(() => resolveNoteConflict(dir, ID, 'bogus'));
+});
+
+test('local delete of a highlight edited in Zotero → not deleted, restored with Zotero values', async () => {
+  const dir = await tmp();
+  const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'orig' });
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const key = (await readNotes(dir, ID)).highlights[0].zoteroKey;
+  const it = w.items.get(key);
+  it.data.annotationComment = 'zotero edit';
+  it.version = w.bump();
+  await removeHighlight(dir, ID, h.id);
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r.pending, 0);
+  assert.equal(w.items.has(key), true);
+  assert.equal(w.calls.filter((c) => c === 'deleteItem').length, 0);
+  const notes = await readNotes(dir, ID);
+  assert.deepEqual(notes.tombstones, []);
+  assert.equal(notes.highlights.length, 1);
+  const back = notes.highlights[0];
+  assert.equal(back.id, h.id);
+  assert.equal(back.zoteroKey, key);
+  assert.equal(back.zoteroVersion, it.version);
+  assert.equal(back.comment, 'zotero edit');
+  assert.deepEqual(back.sentenceIds, ['p1-s1']);
+  assert.deepEqual(back.conflict.mine, { deleted: true });
+  assert.ok(back.conflict.at);
+  assert.equal(notes.zoteroAnnotations.length, 0);
+});
+
+test('created item: version missing and getItem fails → key still saved, no duplicate', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: '' });
+  const w = fakeWriter();
+  w.noVersionOnCreate = true;
+  w.fail.getItem = new ZoteroWriteError('offline', 'down');
+  w.fail.listChildren = new ZoteroWriteError('offline', 'down'); // pull would otherwise fill the version
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const local = (await readNotes(dir, ID)).highlights[0];
+  assert.ok(local.zoteroKey);
+  assert.equal(local.zoteroVersion, null);
+  delete w.fail.getItem;
+  delete w.fail.listChildren;
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.calls.filter((c) => c === 'createItems').length, 1);
+  assert.equal(w.items.size, 1);
 });
 
 test('noteHtml escapes HTML and includes only cards with memos', () => {

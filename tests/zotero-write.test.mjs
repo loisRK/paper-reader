@@ -169,6 +169,69 @@ test('Zotero 9 (no Zotero-Server-ID) -> not writable; writes throw readonly', as
   await rejectsCode(w.authorize(), 'readonly');
 });
 
+test('Zotero 9: reads work (no Server-ID header when none reported), writes still readonly', async () => {
+  const f = fakeFetch((u) => {
+    if (u.endsWith('/api/')) return res(200, '', { 'X-Zotero-Version': '9.0.2' });
+    if (u.includes('/children')) return res(200, [{ key: 'A' }], { 'Last-Modified-Version': '3' });
+    if (u.includes('/items/ABCD1234')) return res(200, { key: 'ABCD1234', version: 2 });
+  });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore() });
+  assert.deepEqual(await w.getItem('ABCD1234'), { key: 'ABCD1234', version: 2 });
+  assert.deepEqual(await w.listChildren('P', undefined, { itemType: 'annotation' }),
+    { items: [{ key: 'A' }], libraryVersion: 3, notModified: false });
+  for (const c of f.calls.filter((x) => !x.url.endsWith('/api/'))) {
+    assert.equal(c.headers['Zotero-Server-ID'], undefined);
+  }
+  await rejectsCode(w.createItems([{}]), 'readonly');
+  await rejectsCode(w.patchItem('ABCD1234', 2, {}), 'readonly');
+
+  const f9id = fakeFetch((u) => {
+    if (u.endsWith('/api/')) return res(200, '', { 'Zotero-Server-ID': SID, 'X-Zotero-Version': '9.0.2' });
+    if (u.includes('/items/ABCD1234')) return res(200, { key: 'ABCD1234' });
+  });
+  const w9 = createZoteroWriter(CFG, { fetchImpl: f9id, authStore: memStore() });
+  assert.deepEqual(await w9.getItem('ABCD1234'), { key: 'ABCD1234' });
+  assert.equal(f9id.calls.at(-1).headers['Zotero-Server-ID'], SID);
+});
+
+test('every request carries a timeout signal; abort/timeout -> offline', async () => {
+  const orig = AbortSignal.timeout;
+  const seen = [];
+  AbortSignal.timeout = (ms) => { seen.push(ms); return orig.call(AbortSignal, ms); };
+  try {
+    const f = fakeFetch((u, init) => {
+      assert.ok(init.signal instanceof AbortSignal, `signal on ${u}`);
+      if (isAuthz(u)) return res(200, { key: 'K', remember: true });
+      if (isItems(u)) return okCreate();
+    });
+    const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore() });
+    await getServerInfo(CFG, { fetchImpl: f });
+    await w.authorize();
+    await w.createItems([{}]);
+    assert.deepEqual(seen, [10000, 10000, 120000, 10000]);
+  } finally {
+    AbortSignal.timeout = orig;
+  }
+
+  for (const name of ['AbortError', 'TimeoutError']) {
+    const hung = async () => { throw new DOMException('aborted', name); };
+    const w = createZoteroWriter(CFG, { fetchImpl: hung, authStore: memStore({ [SID]: 'K' }) });
+    await rejectsCode(w.getItem('X'), 'offline');
+    await rejectsCode(w.listChildren('X'), 'offline');
+    await rejectsCode(w.createItems([{}]), 'offline');
+    await rejectsCode(w.authorize(), 'offline');
+    assert.equal((await getServerInfo(CFG, { fetchImpl: hung })).running, false);
+    // info fetched, then the write itself hangs
+    let n = 0;
+    const late = fakeFetch((u) => {
+      if (!u.endsWith('/api/') && n++ >= 0) throw new DOMException('timed out', name);
+    });
+    const w2 = createZoteroWriter(CFG, { fetchImpl: late, authStore: memStore({ [SID]: 'K' }) });
+    await rejectsCode(w2.patchItem('X', 1, {}), 'offline');
+    await rejectsCode(w2.getItem('X'), 'offline');
+  }
+});
+
 test('getServerInfo reads id and version; major < 10 is not writable', async () => {
   const f10 = fakeFetch(() => undefined);
   assert.deepEqual(await getServerInfo(CFG, { fetchImpl: f10 }),

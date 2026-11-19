@@ -6,9 +6,11 @@
 //      목록별 If-Modified-Since-Version 캐시. annotation 목록(첨부 파일 아래)과
 //      note 목록(논문 항목 아래)은 따로 304 판정한다. 예전 숫자 값은 무시(null 취급)한다.
 //  - note.conflict: { at } | null  — Zotero에서 노트를 직접 고쳐 덮어쓰지 않은 상태.
-//  - tombstones: [{ id, zoteroKey, zoteroVersion }]
+//      설정돼 있는 동안 upsert-note op는 대기열에 남되 전송하지 않는다. resolveNoteConflict로 해제.
+//  - tombstones: [하이라이트 레코드 사본]
 //      로컬에서 지웠지만 Zotero 삭제가 아직 안 된 하이라이트. delete-highlight op가 이것을 읽는다
-//      (지울 key가 notes.json에 남아 있어야만 Zotero 항목을 지운다).
+//      (지울 key가 notes.json에 남아 있어야만 Zotero 항목을 지운다). Zotero에서 그 사이 고쳐졌으면
+//      지우지 않고 이 사본으로 되살린다(conflict.mine = { deleted: true }).
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -168,7 +170,7 @@ export async function removeHighlight(outputDir, id, hid) {
     notes.highlights = notes.highlights.filter((x) => x.id !== hid);
     pending.ops = pending.ops.filter((o) => !(o.op === 'upsert-highlight' && o.id === hid));
     if (h.zoteroKey) {
-      notes.tombstones.push({ id: hid, zoteroKey: h.zoteroKey, zoteroVersion: h.zoteroVersion });
+      notes.tombstones.push({ ...h });
       enqueue(pending, 'delete-highlight', hid);
     }
     return { value: true };
@@ -184,5 +186,17 @@ export async function setCardMemo(outputDir, id, cardId, text) {
     else delete notes.cardMemos[cardId];
     enqueue(pending, 'upsert-note');
     return { value: notes.cardMemos[cardId] ?? '' };
+  });
+}
+
+// After a Zotero-side note edit: 'overwrite' queues my memos over it; 'keep-zotero' drops the
+// queued note op and keeps local memos as-is (the next local memo edit writes again).
+export async function resolveNoteConflict(outputDir, id, choice) {
+  if (choice !== 'overwrite' && choice !== 'keep-zotero') throw new Error(`알 수 없는 선택: ${choice}`);
+  return mutate(outputDir, id, (notes, pending) => {
+    notes.note.conflict = null;
+    if (choice === 'overwrite') enqueue(pending, 'upsert-note');
+    else pending.ops = pending.ops.filter((o) => o.op !== 'upsert-note');
+    return { value: { ...notes.note } };
   });
 }

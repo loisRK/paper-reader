@@ -17,9 +17,14 @@ export class ZoteroWriteError extends Error {
 
 const READONLY_MESSAGE = 'Zotero 10 이상이 필요합니다. 쓰기(동기화)를 사용할 수 없습니다.';
 
-async function call(fetchImpl, url, init) {
+// Every request is bounded so a hung Zotero cannot hold a paper's sync chain forever.
+export const TIMEOUT_MS = 10000;
+export const AUTHORIZE_TIMEOUT_MS = 120000; // the user is clicking Zotero's dialog
+
+// Network failure, abort or timeout -> 'offline'.
+async function call(fetchImpl, url, init = {}, ms = TIMEOUT_MS) {
   try {
-    return await fetchImpl(url, init);
+    return await fetchImpl(url, { ...init, signal: AbortSignal.timeout(ms) });
   } catch {
     throw new ZoteroWriteError('offline', NOT_RUNNING_MESSAGE);
   }
@@ -36,7 +41,7 @@ export async function getServerInfo(cfg, opts = {}) {
   const { fetchImpl = globalThis.fetch } = opts;
   let res;
   try {
-    res = await fetchImpl(`${baseUrl(cfg)}/api/`);
+    res = await fetchImpl(`${baseUrl(cfg)}/api/`, { signal: AbortSignal.timeout(TIMEOUT_MS) });
   } catch {
     return { running: false, serverId: null, version: null, writable: false };
   }
@@ -79,16 +84,15 @@ export function createZoteroWriter(cfg, opts = {}) {
   let info = null;
   let onceKey = null; // remember:false key, consumed by the next write
 
+  // Reads need only a running Zotero (Zotero 7–9 may report no server id).
+  async function ensureRunning() {
+    if (!info) info = parseInfo(await call(fetchImpl, `${base}/api/`));
+    return info;
+  }
+
+  // Writes and authorize need Zotero 10+.
   async function ensureInfo() {
-    if (!info) {
-      let res;
-      try {
-        res = await fetchImpl(`${base}/api/`);
-      } catch {
-        throw new ZoteroWriteError('offline', NOT_RUNNING_MESSAGE);
-      }
-      info = parseInfo(res);
-    }
+    await ensureRunning();
     if (!info.writable) throw new ZoteroWriteError('readonly', READONLY_MESSAGE);
     return info;
   }
@@ -117,7 +121,7 @@ export function createZoteroWriter(cfg, opts = {}) {
       method: 'POST',
       headers: { 'Content-Type': 'application/json', 'Zotero-Server-ID': id },
       body: JSON.stringify({ appName: 'Paper Reader' }),
-    });
+    }, AUTHORIZE_TIMEOUT_MS);
     if (res.status === 403) throw new ZoteroWriteError('denied', 'Zotero에서 접근이 거부되었습니다.', { status: 403 });
     if (res.status === 429) {
       const retryAfter = Number.parseInt(res.headers.get('Retry-After') ?? '', 10);
@@ -201,7 +205,7 @@ export function createZoteroWriter(cfg, opts = {}) {
       });
     },
     async getItem(key) {
-      await ensureInfo();
+      await ensureRunning();
       const res = await read(`/api/users/0/items/${key}?format=json`);
       if (res.status === 404) return null;
       if (!res.ok) throw new ZoteroWriteError('http', `Zotero 조회 실패: HTTP ${res.status}`, { status: res.status });
@@ -209,7 +213,7 @@ export function createZoteroWriter(cfg, opts = {}) {
     },
     // Zotero's local API omits annotation children unless itemType=annotation is requested.
     async listChildren(parentKey, sinceVersion, { itemType } = {}) {
-      await ensureInfo();
+      await ensureRunning();
       const filter = itemType ? `&itemType=${encodeURIComponent(itemType)}` : '';
       const res = await read(
         `/api/users/0/items/${parentKey}/children?format=json${filter}`,
