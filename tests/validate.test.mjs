@@ -17,7 +17,8 @@ const source = {
   figures: [],
 };
 const card = (over = {}) => ({ id: 'c1', section: 'method', question: 'q', answer: 'a', bridge: '', items: [], ...over });
-const d = (cardOver, top = {}) => ({ version: 1, paperId: 'paper1', takeaway: null, cards: [card(cardOver)], glossary: [], ...top });
+const TAKE = { text: 't', evidence: ['p1-s1'], why: 'w' };
+const d = (cardOver, top = {}) => ({ version: 1, paperId: 'paper1', takeaway: TAKE, cards: [card(cardOver)], glossary: [], ...top });
 
 test('claim with unknown evidence id is removed and reported', () => {
   const { digest, problems } = validateDigest(d({ items: [{ kind: 'claim', text: 'X', evidence: ['p99-s1'] }] }), source);
@@ -154,4 +155,21 @@ test('check CLI: missing digest, missing source, bad JSON, no id', async () => {
   r = await run([], s.cfgPath);
   assert.equal(r.code, 1);
   assert.match(r.err, /사용법/);
+});
+
+test('missing or non-object takeaway is reported', () => {
+  for (const takeaway of [undefined, null, 'text', []]) {
+    const { digest, problems } = validateDigest(d({}, { takeaway }), source);
+    assert.equal(digest.takeaway, null);
+    assert.deepEqual(problems, ['takeaway: 없음 – 0번 Takeaway를 작성하세요']);
+  }
+});
+
+test('duplicate card ids are reported and renamed uniquely', () => {
+  const dig = { version: 1, paperId: 'paper1', takeaway: TAKE, glossary: [],
+    cards: [card({ id: 'c1' }), card({ id: 'c1' }), card({ id: 'c1-2' }), card({ id: 'c1' })] };
+  const { digest, problems } = validateDigest(dig, source);
+  // ids written in the file are reserved first, so the genuine 'c1-2' keeps its id (and its read progress)
+  assert.deepEqual(digest.cards.map((c) => c.id), ['c1', 'c1-3', 'c1-2', 'c1-4']);
+  assert.deepEqual(problems, ['c1: 카드 id 중복', 'c1: 카드 id 중복']);
 });

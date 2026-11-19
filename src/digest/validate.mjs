@@ -22,7 +22,15 @@ export function validateDigest(digest, source) {
     const ev = strList(digest.takeaway.evidence);
     takeaway = { text: str(digest.takeaway.text), evidence: ev.filter(known), why: str(digest.takeaway.why) };
     if (!allKnown(ev)) problems.push('takeaway: 근거 확인 필요 – evidence가 없거나 source.json에 없는 문장 ID가 있습니다');
+  } else {
+    problems.push('takeaway: 없음 – 0번 Takeaway를 작성하세요');
   }
+
+  // Card ids key reading progress, so they must be unique. Ids as written are reserved first;
+  // a repeated id gets the next free "<id>-N".
+  const rawId = (c, idx) => (isObj(c) ? str(c.id) : '') || `c${idx + 1}`;
+  const taken = new Set(digest.cards.map(rawId));
+  const used = new Set();
 
   const cards = [];
   digest.cards.forEach((c, idx) => {
@@ -30,7 +38,15 @@ export function validateDigest(digest, source) {
       problems.push(`c${idx + 1}: 카드 형식이 올바르지 않아 제거`);
       return;
     }
-    const id = str(c.id) || `c${idx + 1}`;
+    let id = rawId(c, idx);
+    if (used.has(id)) {
+      problems.push(`${id}: 카드 id 중복`);
+      let n = 2;
+      while (taken.has(`${id}-${n}`)) n += 1;
+      id = `${id}-${n}`;
+      taken.add(id);
+    }
+    used.add(id);
     const section = str(c.section);
     if (!SECTIONS.includes(section)) problems.push(`${id}: 알 수 없는 section "${section}"`);
     const head = (t) => str(t).slice(0, 30);
