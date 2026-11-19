@@ -71,7 +71,7 @@ test('merges id, zotero keys and meta into <outputDir>/<id>/source.json', async 
   const out = logs.join('\n');
   assert.match(out, /문장 2개/);
   assert.match(out, /페이지 2쪽/);
-  assert.match(out, /그림·표 1개/);
+  assert.match(out, /그림·표 1개 \(이미지 0개\)/);
   assert.ok(out.includes("이제 AI 도구에게 'prompts/digest.md 규칙으로 kim2025reader 요약을 써줘'라고 요청하세요."));
   await assert.rejects(fs.access(calls[1].args[2]), 'temp file is cleaned up');
 });
@@ -182,4 +182,17 @@ test('unreadable config gives the settings wording, not the save wording', async
   const code = await main(['K'], { ...rest, configPath, resolveItem: async () => assert.fail('no resolve') });
   assert.equal(code, 1);
   assert.match(errors.at(-1), /^설정 파일을 읽지 못했습니다: /);
+});
+
+test('exit 0 with stderr prints it as warnings and counts figure images', async () => {
+  const { opts, logs, errors } = await setup();
+  const withImage = { ...extracted, figures: [{ ...extracted.figures[0], image: 'figures/fig-1-1.png' }] };
+  const code = await main(['H9RA4VSE'], {
+    ...opts,
+    resolveItem: async () => resolved,
+    runPython: async (_py, args) => { await fs.writeFile(args[2], JSON.stringify(withImage)); return { code: 0, stderr: '2쪽 그림 영역을 찾지 못했습니다: x\n' }; },
+  });
+  assert.equal(code, 0);
+  assert.deepEqual(errors, ['경고: 2쪽 그림 영역을 찾지 못했습니다: x']);
+  assert.match(logs.join('\n'), /그림·표 1개 \(이미지 1개\)/);
 });

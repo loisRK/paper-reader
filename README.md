@@ -136,7 +136,7 @@ npm run reader                                # 읽기 앱: http://127.0.0.1:517
 
 ### 예전에 추출한 논문
 
-Zotero 하이라이트에는 PDF 위치(좌표)가 필요합니다. 이전에 추출한 논문은 한 번만 다시 추출하세요. 그 뒤 `npm run check -- <citekey|itemKey>`로 요약이 여전히 맞는지 확인하세요.
+Zotero 하이라이트에는 PDF 위치(좌표)가, 원문 패널의 그림·표 이미지에는 새 추출기(extractorVersion 3)가 필요합니다. 이전에 추출한 논문은 한 번만 다시 추출하세요. 그림·표는 `<outputDir>/<id>/figures/fig-<쪽>-<n>.png`로 저장되고, 그림 속 글자 조각은 원문 패널에서 "그림 속 글자 보기"로 접힙니다. 그 뒤 `npm run check -- <citekey|itemKey>`로 요약이 여전히 맞는지 확인하세요.
 
 ```bash
 npm run extract -- <citekey|itemKey>
@@ -144,7 +144,7 @@ npm run extract -- <citekey|itemKey>
 
 ## 저작권과 커밋되지 않는 것
 
-- 여러분이 만든 산출물(`digests/` 등 `outputDir`의 `source.json`·`digest.json`·검색 결과)에는 논문 원문 텍스트가 들어 있으므로 **git에 커밋되지 않습니다**(`.gitignore`). 공유하기 전에 각 논문의 라이선스를 확인하세요.
+- 여러분이 만든 산출물(`digests/` 등 `outputDir`의 `source.json`·`digest.json`·그림 이미지(`figures/*.png`)·검색 결과)에는 논문 원문 텍스트가 들어 있으므로 **git에 커밋되지 않습니다**(`.gitignore`). 공유하기 전에 각 논문의 라이선스를 확인하세요.
 - `paper-reader.config.json`(API 키), `data/`(지표 CSV·Zotero 허용 키), `.venv/`도 커밋되지 않습니다.
 - 저장소에 포함된 예제는 CC BY 논문만 사용하며, 출처를 표시합니다.
 
@@ -160,7 +160,7 @@ npm run test:py   # Python 추출기 테스트 (pytest)
 - **Obsidian 내보내기**는 다음 단계에서 지원합니다.
 - 하이라이트는 문장 단위입니다(단어 일부만 칠할 수 없음). 한 번에 한 페이지 안에서만 만들 수 있습니다.
 - 메모를 Zotero로 보내려면 Zotero 10 이상이 필요하고, 실시간 반영은 Zotero가 실행 중일 때만 됩니다.
-- PDF 추출은 블록·단·페이지 경계를 넘는 문장을 나눠 저장하고, 그림 안 텍스트가 본문 문장으로 섞일 수 있습니다. 스캔본(PDF 이미지)은 지원하지 않습니다.
+- PDF 추출은 블록·단·페이지 경계를 넘는 문장을 나눠 저장합니다. 그림·표는 캡션 기준으로 영역을 찾아 이미지로 보여 주며, 그림 요소를 찾지 못한 캡션은 글자로 남고 그 그림 안 텍스트는 본문 문장으로 섞일 수 있습니다. 스캔본(PDF 이미지)은 지원하지 않습니다.
 - 검색 지표(SJR·MJL)는 사용자가 받은 파일에 의존하며, 확인하지 못한 값은 "미확인"으로 둡니다.
 
 ## 라이선스

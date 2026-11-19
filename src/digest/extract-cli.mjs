@@ -84,6 +84,7 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
       error((stderr || '').trim() || `PDF 추출 실패 (exit ${code})`);
       return 1;
     }
+    for (const line of (stderr || '').split('\n').map((l) => l.trim()).filter(Boolean)) error(`경고: ${line}`);
     extracted = JSON.parse(await fs.readFile(tmpFile, 'utf8'));
   } catch (err) {
     error(saveError(err));
@@ -110,9 +111,10 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     return 1;
   }
 
+  const nImages = (source.figures ?? []).filter((f) => f.image).length;
   const nSentences = Object.keys(source.sentences ?? {}).length;
   log(`저장: ${outFile}`);
-  log(`문장 ${nSentences}개 · 페이지 ${(source.pages ?? []).length}쪽 · 그림·표 ${(source.figures ?? []).length}개`);
+  log(`문장 ${nSentences}개 · 페이지 ${(source.pages ?? []).length}쪽 · 그림·표 ${(source.figures ?? []).length}개 (이미지 ${nImages}개)`);
   log(`이제 AI 도구에게 'prompts/digest.md 규칙으로 ${item.id} 요약을 써줘'라고 요청하세요.`);
   return 0;
 }

@@ -461,7 +461,10 @@ def detect_figures(doc, figures, page_infos, body_size, figures_dir):
     page_infos: {page_no: (width, height, [TextBlock in reading order])}.
     figures_dir: existing directory for fig-<page>-<n>.png, or None for no files (image None)."""
     if figures_dir:
-        clear_stale_images(figures_dir)
+        try:
+            clear_stale_images(figures_dir)
+        except OSError as err:
+            print(f"이전 그림 이미지를 정리하지 못했습니다(추출은 계속합니다): {err}", file=sys.stderr)
     by_page = {}
     for fig in figures:
         by_page.setdefault(fig["page"], []).append(fig)

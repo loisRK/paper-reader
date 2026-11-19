@@ -802,3 +802,17 @@ def test_stale_crops_are_removed_and_other_files_kept(tmp_path):
     for name in keep:
         assert (figdir / name).read_text() == "keep"
     assert (figdir / "sub" / "fig-2-2.png").read_bytes() == b"nested"
+
+
+def test_clear_stale_images_failure_only_warns(tmp_path, monkeypatch, capsys):
+    import figure_regions
+
+    def boom(_d):
+        raise PermissionError("denied")
+
+    monkeypatch.setattr(figure_regions, "clear_stale_images", boom)
+    figdir = tmp_path / "figs"
+    figdir.mkdir()
+    result = extract(make_figure_pdf(tmp_path / "w.pdf"), figures_dir=str(figdir))
+    assert result["sentences"]
+    assert "정리하지 못했습니다" in capsys.readouterr().err

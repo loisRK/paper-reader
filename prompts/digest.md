@@ -88,6 +88,7 @@
 
 - 핵심 수치는 `bigNumbers`를 우선 사용한다(`value`는 짧게, `label`은 무엇의 수치인지, `evidence` 필수).
 - 그림·표는 `figures`에 넣는다. `page`는 `source.json`의 `figures`에 있는 page를 쓴다(1 ~ 총 페이지 수).
+- `figures[].label`은 `source.json`의 `figures[].label`을 그대로 쓴다(예: "Figure 2", "Table 1").
 
 ## 9. 용어집
 
