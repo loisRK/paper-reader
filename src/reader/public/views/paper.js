@@ -326,7 +326,8 @@ export function render(container, data, actions) {
   function pdfMessage(text, withButton) {
     src.pdfPane.replaceChildren(el('div', { class: 'pdf-msg' },
       el('p', { text }),
-      withButton ? el('button', { type: 'button', class: 'btn btn-quiet', text: '글로 읽기로 보기', onclick: () => setTab('text', { user: true, focus: true }) }) : null,
+      // Not stored: a paper without a PDF (or a failed open) must not make every later PDF open as text.
+      withButton ? el('button', { type: 'button', class: 'btn btn-quiet', text: '글로 읽기로 보기', onclick: () => setTab('text', { focus: true }) }) : null,
     ));
   }
 
@@ -346,6 +347,7 @@ export function render(container, data, actions) {
       },
     });
     markCurrentEvidence();
+    notesCtl?.pdfChanged();
   }
 
   function setTab(tab, { user = false, focus = false } = {}) {
@@ -392,8 +394,12 @@ export function render(container, data, actions) {
     markCurrentEvidence();
   }
 
+  // On the PDF tab with no PDF to show (none, or failed): use the text view for evidence/figures.
+  const leaveEmptyPdfTab = () => { if (state.tab === 'pdf' && !pdfActive()) setTab('text'); };
+
   function showEvidence(ids, cardId) {
     if (cardId) setCurrent(cardId);
+    leaveEmptyPdfTab();
     for (const n of state.highlighted) n.classList.remove('hl');
     state.highlighted = ids.map(sentenceEl).filter(Boolean);
     if (pdfActive()) {
@@ -425,6 +431,7 @@ export function render(container, data, actions) {
   const hasImage = (f) => Boolean(findFigure(source.figures, f)?.image) && figLayout.size > 0;
   function showFigure(f) {
     const fig = findFigure(source.figures, f);
+    leaveEmptyPdfTab();
     if (pdfActive()) {
       if (mobile.matches) setSheet(true);
       const cap = fig?.captionSentenceId;
@@ -558,7 +565,10 @@ export function render(container, data, actions) {
     })
     : null;
   notesCtl = actions.notes
-    ? setupNotes({ id: data.id, source, panel: source_, actions, example: data.example === true, onNotes: (n) => memos?.update(n) })
+    ? setupNotes({
+      id: data.id, source, panel: source_, actions, example: data.example === true, onNotes: (n) => memos?.update(n),
+      pdf: { view: () => pdf.view, pane: src.pdfPane },
+    })
     : null;
   const notesStatus = notesCtl?.statusNode ?? null;
 

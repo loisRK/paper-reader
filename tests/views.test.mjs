@@ -84,7 +84,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction, pdfSelectionResult, pdfMarkLayers, pdfPointSentence } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -403,4 +403,73 @@ test('pagesToDraw: 보이는 쪽 ±1, 1..쪽 수 안', () => {
   assert.deepEqual([...pagesToDraw([4, 5], 10)], [3, 4, 5, 6]);
   assert.deepEqual([...pagesToDraw([10], 10)], [9, 10]);
   assert.deepEqual([...pagesToDraw([], 10)], []);
+});
+
+// ----- PDF view: selection / marks / click (Task 5) -----
+const pdfSource = {
+  blocks: [{ id: 'b1', page: 1, sentenceIds: ['p1-s1', 'p1-s2', 'p1-s3'] }, { id: 'b2', page: 2, sentenceIds: ['p2-s1'] }],
+  sentences: {
+    'p1-s1': { page: 1, text: 'A', pdfRects: [[50, 688, 300, 700]] },
+    'p1-s2': { page: 1, text: 'B', pdfRects: [[50, 668, 200, 680]] },
+    'p1-s3': { page: 1, text: 'C', pdfRects: [[320, 688, 400, 700]] },
+    'p2-s1': { page: 2, text: 'E', pdfRects: [[50, 688, 300, 700], [50, 676, 120, 686]] },
+  },
+};
+
+test('pdfSelectionResult: 한 쪽 두 문장 → 두 ID(문장 순서), pages 1개', () => {
+  const r = pdfSelectionResult({ pageRects: new Map([[1, [[50, 668, 200, 680], [60, 690, 280, 698]]]]), source: pdfSource });
+  assert.deepEqual(r.ids, ['p1-s1', 'p1-s2']);
+  assert.deepEqual([...r.pages], [1]);
+});
+
+test('pdfSelectionResult: 두 쪽에 걸치면 pages.size 2, ID는 쪽 순서', () => {
+  const r = pdfSelectionResult({ pageRects: new Map([[2, [[50, 688, 300, 700]]], [1, [[320, 688, 400, 700]]]]), source: pdfSource });
+  assert.deepEqual(r.ids, ['p1-s3', 'p2-s1']);
+  assert.equal(r.pages.size, 2);
+});
+
+test('pdfSelectionResult: 문장과 겹치지 않으면(그림 속 글자 등) ids [] · pages 비어 있음', () => {
+  const r = pdfSelectionResult({ pageRects: new Map([[1, [[50, 100, 200, 120]]]]), source: pdfSource });
+  assert.deepEqual(r.ids, []);
+  assert.equal(r.pages.size, 0);
+  assert.deepEqual(pdfSelectionResult({ pageRects: new Map(), source: pdfSource }).ids, []);
+  assert.deepEqual(pdfSelectionResult({ pageRects: new Map([[1, []]]), source: {} }).ids, []);
+});
+
+test('pdfSelectionResult: 한 쪽은 걸친 문장 없음 + 다른 쪽 한 문장 → 한 쪽으로 본다', () => {
+  const r = pdfSelectionResult({ pageRects: new Map([[1, [[50, 100, 200, 120]]], [2, [[50, 688, 300, 700]]]]), source: pdfSource });
+  assert.deepEqual(r.ids, ['p2-s1']);
+  assert.deepEqual([...r.pages], [2]);
+});
+
+test('pdfMarkLayers: 내 하이라이트 = 문장 색, Zotero = 저장된 rects, rects 없으면 문장 pdfRects로 대신', () => {
+  const notes = {
+    highlights: [{ id: 'h1', sentenceIds: ['p1-s1', 'p1-s2'], color: '#f19837' }],
+    zoteroAnnotations: [
+      { key: 'Z1', page: 1, sentenceIds: ['p1-s3'], color: '#a28ae5', rects: [[320, 688, 380, 700]] },
+      { key: 'Z2', page: 2, sentenceIds: ['p2-s1'], color: '#5fb236' }, // old data: no rects
+      { key: 'Z3', page: 2, sentenceIds: [], color: '#aaaaaa', rects: [] }, // nothing to draw
+    ],
+  };
+  const { marks, zoteroRects } = pdfMarkLayers(notes, pdfSource);
+  assert.deepEqual([...marks], [['p1-s1', { color: '#f19837' }], ['p1-s2', { color: '#f19837' }]]);
+  assert.deepEqual(zoteroRects, [
+    { page: 1, rects: [[320, 688, 380, 700]], color: '#a28ae5' },
+    { page: 2, rects: [[50, 688, 300, 700], [50, 676, 120, 686]], color: '#5fb236' },
+  ]);
+  const empty = pdfMarkLayers(null, pdfSource);
+  assert.equal(empty.marks.size, 0);
+  assert.deepEqual(empty.zoteroRects, []);
+});
+
+test('pdfPointSentence: 클릭 점(화면) → PDF 좌표 → 표시된 문장만', () => {
+  // scale 1, page 612x792: viewport y = 792 - pdf y
+  const viewport = { convertToPdfPoint: (x, y) => [x, 792 - y] };
+  const pageBox = { left: 100, top: 50 };
+  // p1-s2 rect [50,668,200,680] → css y 112..124 → client y 162..174
+  const hit = { x: 100 + 60, y: 50 + 118, pageBox, viewport, page: 1, source: pdfSource };
+  assert.equal(pdfPointSentence({ ...hit, sids: ['p1-s2'] }), 'p1-s2');
+  assert.equal(pdfPointSentence({ ...hit, sids: ['p1-s1'] }), null);
+  assert.equal(pdfPointSentence({ ...hit, sids: [] }), null);
+  assert.equal(pdfPointSentence({ ...hit, x: 100 + 500, sids: ['p1-s2'] }), null);
 });

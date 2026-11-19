@@ -303,9 +303,9 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .pdf-marks { position: absolute; inset: 0; pointer-events: none; }
 .pdf-marks > div { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
 .pdf-ev { background: color-mix(in srgb, var(--hl-ring) 20%, transparent); }
-.pdf-mark-mine { background: color-mix(in srgb, var(--mark, #ffd400) 45%, transparent); }
+.pdf-mark-mine { background: color-mix(in srgb, var(--mark, #ffd400) 38%, transparent); }
 .pdf-mark-zot { border-bottom: 2px dotted var(--accent); }
-.pdf-mark-zotrect { background: color-mix(in srgb, var(--mark, #ffd400) 35%, transparent); }
+.pdf-marks > .pdf-mark-zotrect { border: 2px dotted var(--mark, var(--accent)); mix-blend-mode: normal; }
 .pdf-marks > .pdf-flash { background: color-mix(in srgb, var(--hl-ring) 45%, transparent); box-shadow: 0 0 0 2px var(--hl-ring); mix-blend-mode: normal; opacity: .9; animation: pdf-flash 1.6s ease-out forwards; }
 @keyframes pdf-flash { 0%, 60% { opacity: .9; } 100% { opacity: 0; } }
 .pdf-msg { padding: 2rem 1.5rem; color: var(--muted); }

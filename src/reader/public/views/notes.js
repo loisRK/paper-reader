@@ -1,6 +1,7 @@
 // Highlights and memos on the source panel. Pure helpers are tested in Node;
 // the DOM pieces only touch `document` when called.
 import { el, setChildren } from './dom.js';
+import { matchRects, clientRectsToPdf, pdfRectToCss, sentenceAtPoint } from './pdf-geom.js';
 
 // Duplicate of ZOTERO_COLORS in src/zotero/annotations.mjs (source of truth; the
 // static root is public/, so the server module can't be imported here).
@@ -139,6 +140,51 @@ export function conflictView(conflict) {
   return { text: `Zotero에서 바뀌었습니다. 내가 쓴 내용: ${conflict.mine?.comment ?? ''}`, actions: ['dismiss'] };
 }
 
+// ----- PDF view -----
+
+// Selection on the PDF text layer, as PDF rects per page -> sentence ids (page order, then
+// sentence order) and the pages that actually matched. The match rule is pdf-geom's matchRects,
+// the same one Zotero annotations go through.
+export function pdfSelectionResult({ pageRects, source }) {
+  const ids = [];
+  const pages = new Set();
+  const entries = [...(pageRects instanceof Map ? pageRects : [])].sort((a, b) => a[0] - b[0]);
+  for (const [page, rects] of entries) {
+    const hit = matchRects(rects, page, source);
+    if (!hit.length) continue;
+    pages.add(page);
+    ids.push(...hit);
+  }
+  return { ids, pages };
+}
+
+// What the PDF view draws for the notes: my highlights per sentence (their colour), and Zotero
+// annotations as their stored rects (old data without rects: the matched sentences' pdfRects).
+export function pdfMarkLayers(notes, source) {
+  const marks = new Map();
+  for (const h of notes?.highlights ?? []) {
+    for (const sid of h.sentenceIds ?? []) if (!marks.has(sid)) marks.set(sid, { color: h.color });
+  }
+  const zoteroRects = [];
+  for (const z of notes?.zoteroAnnotations ?? []) {
+    let rects = Array.isArray(z.rects) ? z.rects : [];
+    let page = z.page;
+    if (!rects.length) {
+      const sents = (z.sentenceIds ?? []).map((sid) => source?.sentences?.[sid]).filter((x) => Array.isArray(x?.pdfRects));
+      rects = sents.flatMap((x) => x.pdfRects);
+      page = Number.isInteger(page) && page > 0 ? page : sents[0]?.page;
+    }
+    if (rects.length && Number.isInteger(page)) zoteroRects.push({ page, rects, color: z.color });
+  }
+  return { marks, zoteroRects };
+}
+
+// Client point (x, y) on a PDF page -> the marked sentence under it (only among `sids`), or null.
+export function pdfPointSentence({ x, y, pageBox, viewport, page, source, sids }) {
+  const [px, py] = viewport.convertToPdfPoint(x - pageBox.left, y - pageBox.top);
+  return sentenceAtPoint(px, py, page, source, sids ?? []);
+}
+
 // ---------- DOM ----------
 
 const sentOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('.sent') ?? null;
@@ -158,14 +204,15 @@ function swatches(current, onPick) {
 }
 
 // source: extracted source (blocks, sentences); panel: the .source element.
-// Returns { statusNode, refresh, dispose }.
-export function setupNotes({ id, source, panel, actions, onNotes, example = false }) {
+// pdf (optional): { view: () => createPdfView handle | null, pane: the PDF tab panel inside `panel` }.
+// Returns { statusNode, refresh, pdfChanged, dispose } — call pdfChanged() once a PDF view exists.
+export function setupNotes({ id, source, panel, actions, onNotes, example = false, pdf = null }) {
   // Example papers never store memos (writes are 403): one static line, no badge, no
   // authorize button, no re-extract hint, no selection toolbar, no polling.
   if (example) {
     const statusNode = el('div', { class: 'notes-status st-example', role: 'status' },
       el('span', { class: 'muted st-hint', text: statusText('example') }));
-    return { statusNode, refresh: async () => {}, dispose() {} };
+    return { statusNode, refresh: async () => {}, pdfChanged() {}, dispose() {} };
   }
   const order = [];
   const pageOf = new Map();
@@ -234,6 +281,41 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
       if (at !== -1 && next) body.insertBefore(box, next); else body.append(box);
       extras.push(box);
     }
+    renderPdfMarks();
+  }
+
+  // ----- the same notes on the PDF view -----
+  const pdfView = () => pdf?.view?.() ?? null;
+  const pdfShown = () => Boolean(pdf && !pdf.pane.hidden && pdfView());
+  function renderPdfMarks() {
+    const v = pdfView();
+    if (!v) return;
+    const { marks, zoteroRects } = pdfMarkLayers(s.notes, source);
+    v.setMarks(marks, zoteroRects);
+  }
+  // Client rect of a sentence's first PDF rect (where its popover goes), or null.
+  function pdfSentenceRect(sid) {
+    const sent = source.sentences?.[sid];
+    const r0 = Array.isArray(sent?.pdfRects) ? sent.pdfRects[0] : null;
+    const layer = r0 ? pdfView()?.pageLayer(sent.page) : null;
+    if (!layer?.viewport) return null;
+    const box = layer.el.getBoundingClientRect();
+    const c = pdfRectToCss(r0, layer.viewport);
+    const left = box.left + c.left;
+    const top = box.top + c.top;
+    return { left, top, right: left + c.width, bottom: top + c.height, width: c.width, height: c.height };
+  }
+  // The marked sentence under a client point on a PDF page, or null.
+  function pdfHit(target, x, y) {
+    const pageEl = target instanceof Element ? target.closest('.pdf-page') : null;
+    if (!pageEl || !pdf?.pane.contains(pageEl)) return null;
+    const page = Number(pageEl.dataset.page);
+    const layer = pdfView()?.pageLayer(page);
+    if (!layer?.viewport) return null;
+    return pdfPointSentence({
+      x, y, pageBox: pageEl.getBoundingClientRect(), viewport: layer.viewport, page, source,
+      sids: [...sentenceMarks(s.notes).keys()],
+    });
   }
 
   // ----- popover -----
@@ -272,6 +354,8 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   }
 
   const sentEl = (sid) => panel.querySelector(`.sent[data-sid="${CSS.escape(sid)}"]`);
+  // Where a sentence's popover goes in the view that is showing: an element or a client rect.
+  const anchorOf = (sid) => (pdfShown() ? pdfSentenceRect(sid) : sentEl(sid)) ?? panel;
 
   async function openPopover(sid, anchor, focusText = false) {
     if (s.disposed) return;
@@ -296,7 +380,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     s.pop = pop;
     s.popover = sid;
     document.body.append(pop);
-    place(pop, anchor.getBoundingClientRect());
+    place(pop, typeof anchor.getBoundingClientRect === 'function' ? anchor.getBoundingClientRect() : anchor);
     (pop.querySelector('textarea') ?? pop.querySelector('button'))?.focus({ preventScroll: true });
   }
 
@@ -319,7 +403,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     };
     // Re-sending the same values clears the conflict and queues an upsert (recreates if unlinked).
     const cur = () => s.notes.highlights.find((x) => x.id === h.id) ?? h;
-    const ack = async () => { const sid = s.popover; const c = cur(); if (await put({ color: c.color, comment: c.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); };
+    const ack = async () => { const sid = s.popover; const c = cur(); if (await put({ color: c.color, comment: c.comment ?? '' })) openPopover(sid, anchorOf(sid), false); };
     const cv = conflictView(h.conflict);
     const conflictButtons = {
       dismiss: () => el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '충돌 안내 닫기', onclick: ack }),
@@ -343,6 +427,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     const sel = document.getSelection();
     if (!sel || sel.isCollapsed || !sel.rangeCount) return null;
     const range = sel.getRangeAt(0);
+    if (pdf?.pane.contains(range.commonAncestorContainer)) return readPdfSelection(range);
     if (!panel.contains(range.commonAncestorContainer)) return null;
     const hit = [...panel.querySelectorAll('.sent')].filter((n) => range.intersectsNode(n) && n.getClientRects().length);
     if (!hit.length) return null;
@@ -354,6 +439,47 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     return { ids, rect: rects[rects.length - 1] ?? range.getBoundingClientRect(), pages: new Set(ids.map((x) => pageOf.get(x))) };
   }
 
+  // Selection on the PDF text layer: the selected characters' client rects, per page, in PDF
+  // coordinates -> sentences (pdfSelectionResult). Only text nodes are measured: a range's own
+  // getClientRects() would also return the box of every element it fully contains (a whole page).
+  function readPdfSelection(range) {
+    const v = pdfShown() ? pdfView() : null;
+    if (!v) return null;
+    const root = range.commonAncestorContainer;
+    const texts = [];
+    if (root.nodeType === 3) texts.push(root);
+    else {
+      const walk = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+      for (let t = walk.nextNode(); t; t = walk.nextNode()) if (range.intersectsNode(t)) texts.push(t);
+    }
+    const byPage = new Map();
+    let last = null;
+    for (const t of texts) {
+      const pageEl = t.parentElement?.closest('.textLayer')?.closest('.pdf-page');
+      if (!pageEl) continue;
+      const r = document.createRange();
+      r.selectNodeContents(t);
+      if (t === range.startContainer) r.setStart(t, range.startOffset);
+      if (t === range.endContainer) r.setEnd(t, range.endOffset);
+      if (!r.toString().trim()) continue;
+      const rects = [...r.getClientRects()].filter((x) => x.width > 0 && x.height > 0);
+      if (!rects.length) continue;
+      const page = Number(pageEl.dataset.page);
+      byPage.set(page, [...(byPage.get(page) ?? []), ...rects]);
+      last = rects[rects.length - 1];
+    }
+    if (!byPage.size) return null;
+    const pageRects = new Map();
+    for (const [page, rects] of byPage) {
+      const layer = v.pageLayer(page);
+      if (layer?.viewport) pageRects.set(page, clientRectsToPdf(rects, layer.el.getBoundingClientRect(), layer.viewport));
+    }
+    const { ids, pages } = pdfSelectionResult({ pageRects, source });
+    // Old extraction (no pdfRects): nothing can match, but say why instead of showing nothing.
+    if (s.notes?.needsReextract) return { ids, rect: last, pages: new Set(byPage.keys()) };
+    return ids.length ? { ids, rect: last, pages } : null;
+  }
+
   const create = singleFlight(async (withMemo) => {
     const sel = s.sel;
     if (!sel) return;
@@ -363,7 +489,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
       document.getSelection()?.removeAllRanges();
       hideToolbar();
       replaceHighlight(rec);
-      if (withMemo) openPopover(rec.sentenceIds[0], sentEl(rec.sentenceIds[0]) ?? panel, true);
+      if (withMemo) openPopover(rec.sentenceIds[0], anchorOf(rec.sentenceIds[0]), true);
     } catch (e) { if (!s.disposed) fail(e); }
   });
 
@@ -396,10 +522,11 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   let toggledClosed = null;
   const onPanelClick = (e) => {
     const n = sentOf(e.target);
+    const sid = n?.dataset.sid ?? pdfHit(e.target, e.clientX, e.clientY);
     const skip = toggledClosed;
     toggledClosed = null;
-    if (!n || !document.getSelection()?.isCollapsed || n.dataset.sid === skip) return;
-    if (sentenceMarks(s.notes).has(n.dataset.sid)) openPopover(n.dataset.sid, n);
+    if (!sid || !document.getSelection()?.isCollapsed || sid === skip) return;
+    if (sentenceMarks(s.notes).has(sid)) openPopover(sid, n ?? anchorOf(sid));
   };
   const onPanelKey = (e) => {
     const n = sentOf(e.target);
@@ -412,7 +539,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   };
   const onDocDown = (e) => {
     const n = sentOf(e.target);
-    const sid = n?.dataset.sid ?? null;
+    const sid = n?.dataset.sid ?? pdfHit(e.target, e.clientX, e.clientY);
     const action = popoverDownAction({
       open: Boolean(s.pop), inPopover: Boolean(s.pop?.contains(e.target)),
       sid, marked: Boolean(sid && sentenceMarks(s.notes).has(sid)), openSid: s.popover,
@@ -458,6 +585,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   return {
     statusNode,
     refresh: poll,
+    pdfChanged: renderPdfMarks,
     dispose() {
       s.disposed = true;
       poller.stop();

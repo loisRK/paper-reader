@@ -254,7 +254,7 @@ export function createPdfView({ paperId, source, container, onError }) {
     const ids = (Array.isArray(sids) ? sids : []).filter((sid) => sentences[sid]);
     const rects = ids.flatMap(sentRects);
     const page = rects[0]?.page ?? ids.map((sid) => sentences[sid].page).find(Number.isInteger);
-    if (!page || (st.pdf && page > st.pages.length)) return false;
+    if (!page || (st.pdf && page > st.pdf.numPages)) return false;
     whenReady(() => {
       const p = st.pages[page - 1];
       if (!p) return;
