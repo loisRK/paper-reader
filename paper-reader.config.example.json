@@ -1,6 +1,6 @@
 {
   "outputDir": "./digests",
-  "zotero": { "baseUrl": "http://127.0.0.1:23119" },
+  "zotero": { "baseUrl": "http://127.0.0.1:23119", "authFile": "./data/zotero-auth.json" },
   "reader": { "port": 5173 },
   "search": {
     "monthsBack": 24,
