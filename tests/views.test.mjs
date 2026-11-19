@@ -548,6 +548,10 @@ test('jobView: running states are busy info with Korean progress text', () => {
 
 test('jobView: terminal states', () => {
   assert.deepEqual(jobView({ state: 'done' }), { text: '요약을 만들었습니다', busy: false, tone: 'ok' });
+  // the folder PDF was the same paper as one that already had a summary: the AI did not run
+  const msg = "이미 요약이 있는 논문입니다. 다시 만들려면 논문 화면에서 '요약 다시 만들기'를 누르세요.";
+  assert.deepEqual(jobView({ state: 'done', existing: true, message: msg }), { text: msg, busy: false, tone: 'info' });
+  assert.equal(jobView({ state: 'done', message: '새 요약이 준비되었습니다.' }).text, '요약을 만들었습니다');
   assert.deepEqual(jobView({ state: 'failed', message: 'AI 도구 로그인이 필요합니다.' }),
     { text: '요약을 만들지 못했습니다: AI 도구 로그인이 필요합니다.', busy: false, tone: 'error' });
   assert.deepEqual(jobView({ state: 'cancelled' }), { text: '취소했습니다', busy: false, tone: 'info' });
@@ -646,4 +650,25 @@ test('takeawayCard: the first, unnumbered-in-progress card model', () => {
   assert.equal(d.why, null);
   assert.equal(d.whyLabel, null);
   assert.deepEqual(d.evidence, []);
+});
+
+// --- memos and progress after "요약 다시 만들기" (Ruling I-2) ---
+import { orphanMemos } from '../src/reader/public/views/card-memos.js';
+import { readCount } from '../src/reader/public/views/paper.js';
+
+test('orphanMemos: non-empty memos whose card is not in the digest, in stored order', () => {
+  const cards = [{ id: 'c1-r1' }, { id: 'c2-r1' }];
+  assert.deepEqual(orphanMemos(cards, { c3: 'old', 'c1-r1': 'now', c1: '  ', c9: 'older' }), [
+    { cardId: 'c3', text: 'old' }, { cardId: 'c9', text: 'older' },
+  ]);
+  assert.deepEqual(orphanMemos(cards, {}), []);
+  assert.deepEqual(orphanMemos(undefined, undefined), []);
+  assert.deepEqual(orphanMemos([], { c1: 5 }), []);
+});
+
+test('readCount ignores read ids from an earlier digest', () => {
+  const cards = [{ id: 'c1-r1' }, { id: 'c2-r1' }];
+  assert.equal(readCount(cards, ['c1', 'c2', 'c3', 'c1-r1']), 1);
+  assert.equal(readCount(cards, new Set(['c1'])), 0);
+  assert.equal(readCount([], ['c1']), 0);
 });

@@ -936,6 +936,19 @@ test('noteHtml escapes HTML and includes only cards with memos', () => {
   assert.equal(noteHtml(cards, {}), '<h1>Paper Reader 메모</h1>');
 });
 
+test('noteHtml keeps memos of cards no longer in the digest under "이전 요약의 메모"', () => {
+  const now = [{ id: 'c1-r1', question: 'New first?' }];
+  const html = noteHtml(now, { c3: 'old <memo>\nline2', 'c1-r1': 'fresh', c4: '  ', c5: 'another' });
+  assert.equal(
+    html,
+    '<h1>Paper Reader 메모</h1>'
+      + '<h2>1. New first?</h2><p>fresh</p>'
+      + '<h2>이전 요약의 메모</h2><p>old &lt;memo&gt;<br>line2</p><p>another</p>',
+  );
+  // only old memos: still a note
+  assert.equal(noteHtml(now, { c3: 'x' }), '<h1>Paper Reader 메모</h1><h2>이전 요약의 메모</h2><p>x</p>');
+});
+
 test('setCardMemo with empty text removes the memo', async () => {
   const dir = await tmp();
   await setCardMemo(dir, ID, 'c1', 'x');

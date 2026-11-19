@@ -317,7 +317,7 @@ function digestControl({ id, hasDigest, example, actions }) {
       cancel.disabled = false;
       return;
     }
-    if (job.state === 'done') {
+    if (job.state === 'done' && !job.existing) {
       const reload = el('button', { type: 'button', class: 'btn btn-small', text: '새로고침', onclick: () => actions.refreshList() });
       status.textContent = '새 요약이 준비되었습니다';
       box.replaceChildren(status, reload, logBox);
@@ -365,6 +365,12 @@ function digestControl({ id, hasDigest, example, actions }) {
   });
   watch(); // a job may already be running (started from the list)
   return { button, box, dispose() { disposed = true; watcher?.stop(); } };
+}
+
+// Read cards of this digest; ids from an earlier digest (before '요약 다시 만들기') count for nothing.
+export function readCount(cards, read) {
+  const ids = new Set((cards ?? []).map((c) => c.id));
+  return [...(read ?? [])].filter((r) => ids.has(r)).length;
 }
 
 // data: { id, source, digest, problems, progress, links }
@@ -550,8 +556,7 @@ export function render(container, data, actions) {
   }
 
   function renderProgress() {
-    const ids = new Set(cards.map((c) => c.id));
-    const done = [...state.read].filter((r) => ids.has(r)).length;
+    const done = readCount(cards, state.read);
     progressSlot.replaceChildren(
       progressBar(done, cards.length, '읽은 카드 비율'),
       el('span', { class: 'progress-text', text: `${done}/${cards.length}`, title: '읽음' }),
@@ -648,6 +653,7 @@ export function render(container, data, actions) {
         flow.append(el('p', { class: 'bridge' }, richText(card.bridge, glossary, seen)));
       }
     });
+    if (memos) flow.append(memos.oldNode);
     if ('IntersectionObserver' in window) {
       observer = new IntersectionObserver((entries) => {
         const hit = entries.find((e) => e.isIntersecting);
@@ -683,7 +689,7 @@ export function render(container, data, actions) {
   let notesCtl = null;
   const memos = actions.notes && actions.saveCardMemo
     ? setupCardMemos({
-      id: data.id, actions, example: data.example === true, getMode: () => state.mode, refresh: () => notesCtl?.refresh(),
+      id: data.id, actions, example: data.example === true, getMode: () => state.mode, refresh: () => notesCtl?.refresh(), cards,
     })
     : null;
   notesCtl = actions.notes

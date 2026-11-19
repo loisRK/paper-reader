@@ -18,6 +18,34 @@ export const EXAMPLE_MESSAGE = '예제 논문은 요약을 다시 만들 수 없
 export const NOT_FOUND_MESSAGE = '논문을 찾을 수 없습니다.';
 export const UNEXPECTED_MESSAGE = '요약을 만들지 못했습니다. 기존 요약은 그대로입니다. 서버 로그를 확인하세요.';
 export const TIMEOUT_MESSAGE = '시간이 너무 오래 걸려 멈췄습니다.';
+export const HAS_DIGEST_MESSAGE = "이미 요약이 있는 논문입니다. 다시 만들려면 논문 화면에서 '요약 다시 만들기'를 누르세요.";
+
+const REVISION = /-r(\d+)$/;
+
+/**
+ * Card memos and read progress are keyed by card id. When a digest replaces an older one, its cards
+ * get ids no earlier digest used (`<id>-r<N>`, N = 1 + highest revision in the old ids), so old memos
+ * never attach to different content. Digest fields hold no other card-id references. Pure.
+ */
+export function reviseCardIds(digest, oldDigest) {
+  const oldCards = Array.isArray(oldDigest?.cards) ? oldDigest.cards : null;
+  if (!oldCards || !Array.isArray(digest?.cards)) return digest;
+  let top = 0;
+  for (const c of oldCards) {
+    const m = typeof c?.id === 'string' ? REVISION.exec(c.id) : null;
+    if (m) top = Math.max(top, Number(m[1]));
+  }
+  const n = top + 1;
+  const used = new Set();
+  const cards = digest.cards.map((c, idx) => {
+    const id = (typeof c?.id === 'string' && c.id) || `c${idx + 1}`;
+    let next = `${id.replace(REVISION, '')}-r${n}`;
+    if (used.has(next)) next = `${id}-r${n}`;
+    used.add(next);
+    return { ...c, id: next };
+  });
+  return { ...digest, cards };
+}
 
 export class DigestJobError extends Error {
   constructor(status, message) {
@@ -110,11 +138,16 @@ export function createDigestJobs({ cfg, deps = {} }) {
           const r = await extract(job.paperId);
           if (r?.merged && typeof r.id === 'string' && r.id !== job.paperId) {
             // Same PDF already extracted under another id: digest that paper instead of a duplicate.
-            addLog(job, `이미 추출된 같은 논문(${r.id})으로 진행합니다.`);
             job.paperId = r.id;
             ctx.ids.add(r.id);
             last.set(r.id, job);
             paperDir = path.join(out, r.id);
+            // It already has a summary: regenerating is the paper view's explicit '요약 다시 만들기'.
+            if (r.state === 'digest' || (await readJsonFile(path.join(paperDir, 'digest.json'))) !== undefined) {
+              outcome = { state: 'done', existing: true, message: HAS_DIGEST_MESSAGE };
+              return;
+            }
+            addLog(job, `이미 추출된 같은 논문(${r.id})으로 진행합니다.`);
           }
         } catch (err) {
           if (ctx.cancelled) return;
@@ -178,7 +211,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
         }
         if (!problems.length) {
           if (ctx.cancelled) return;
-          await replaceDigest(paperDir, raw);
+          await replaceDigest(paperDir, reviseCardIds(raw, await readJsonFile(path.join(paperDir, 'digest.json'))));
           outcome = { state: 'done', message: '새 요약이 준비되었습니다.' };
           delete job.problems;
           return;

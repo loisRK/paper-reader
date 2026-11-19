@@ -21,6 +21,14 @@ export function debounce(fn, ms, { setTimeout: st, clearTimeout: ct } = globalTh
   return d;
 }
 
+// Memos whose card is not in the current digest (it was regenerated with new card ids). Read-only.
+export function orphanMemos(cards, cardMemos) {
+  const ids = new Set((Array.isArray(cards) ? cards : []).map((c) => c?.id));
+  return Object.entries(cardMemos ?? {})
+    .filter(([cardId, text]) => !ids.has(cardId) && typeof text === 'string' && text.trim())
+    .map(([cardId, text]) => ({ cardId, text }));
+}
+
 // Memos are for 10-minute mode, and never for bundled example papers (writes are 403).
 export const memosVisible = (mode, example) => mode === '10min' && !example;
 
@@ -34,12 +42,25 @@ export const shouldToast = ({ wasFailed }) => !wasFailed;
 // A card whose latest text the server has not acknowledged must be sent again.
 export const needsResend = ({ dirty, failed }) => Boolean(dirty || failed);
 
-// Returns { bannerNode, memoNode(cardId), reset(), update(notes), dispose() }.
-export function setupCardMemos({ id, actions, example = false, getMode, refresh }) {
+// Returns { bannerNode, oldNode, memoNode(cardId), reset(), update(notes), dispose() }.
+export function setupCardMemos({ id, actions, example = false, getMode, refresh, cards: digestCards = [] }) {
   // Per-card state survives reset() (re-render) so unsent text is never lost.
   const cards = new Map();
   let disposed = false;
   const bannerNode = el('div', { class: 'memo-conflict-slot' });
+  const oldNode = el('div', { class: 'memo-old-slot' });
+  let oldOpen = false;
+
+  function renderOld(notes) {
+    const old = example ? [] : orphanMemos(digestCards, notes?.cardMemos);
+    if (!old.length) { oldNode.replaceChildren(); return; }
+    const details = el('details', { class: 'memo-old', open: oldOpen },
+      el('summary', { text: `이전 요약의 메모 (${old.length})` }),
+      el('p', { class: 'muted', text: '요약을 다시 만들기 전에 쓴 메모입니다. 읽기만 할 수 있습니다.' }),
+      el('ul', {}, old.map((m) => el('li', { class: 'memo-old-text', text: m.text }))));
+    details.addEventListener('toggle', () => { oldOpen = details.open; });
+    oldNode.replaceChildren(details);
+  }
 
   const label = (st, t) => { if (st.status) st.status.textContent = t; };
 
@@ -138,6 +159,7 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
 
   return {
     bannerNode,
+    oldNode,
     memoNode,
     // Called before the card list is rebuilt: send unacknowledged text, drop DOM refs only.
     reset() {
@@ -147,6 +169,7 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
     update(notes) {
       if (disposed) return;
       renderConflict(notes);
+      renderOld(notes);
       const memos = notes?.cardMemos ?? {};
       for (const [cardId, value] of Object.entries(memos)) {
         const st = stateOf(cardId);

@@ -16,6 +16,8 @@ const SOURCE = {
 const GOOD = fullDigest({ paperId: 'p1', evidence: 'p1-s2', cards: 9 });
 const BAD = { ...GOOD, cards: [{ ...GOOD.cards[0], items: [{ kind: 'claim', text: 'bad', evidence: ['p9-s9'] }] }] };
 const OLD = { ...GOOD, takeaway: { text: 'old', evidence: ['p1-s1'], why: 'w' } };
+// GOOD as stored over OLD: card ids get the first revision suffix.
+const GOOD_R1 = { ...GOOD, cards: GOOD.cards.map((x) => ({ ...x, id: `${x.id}-r1` })) };
 
 const tick = () => new Promise((r) => setTimeout(r, 5));
 async function waitFor(fn, ms = 2000) {
@@ -93,7 +95,7 @@ test('first attempt passes: done, digest.json replaced, digest.prev.json keeps t
   assert.equal(done.attempt, 1);
   assert.equal(typeof done.finishedAt, 'string');
   assert.ok(done.log.some((l) => l.includes('Read source.json')));
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c2.out, 'p1', 'digest.json'), 'utf8')), GOOD);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c2.out, 'p1', 'digest.json'), 'utf8')), GOOD_R1);
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(c2.out, 'p1', 'digest.prev.json'), 'utf8')), OLD);
   assert.deepEqual(c2.calls[0].files, ['TASK.md', 'digest.md', 'figures.txt', 'paper.txt']);
   assert.equal(c2.calls[0].id, 'claude');
@@ -143,7 +145,7 @@ test('fail once then pass: attempt 2, second prompt lists the problems, previous
   assert.match(c.calls[1].prompt, /근거 없는 claim 제거 – bad/);
   assert.deepEqual(JSON.parse(c.calls[1].prevDigest), BAD);
   for (const w of c.workdirs) assert.equal(await exists(w), false);
-  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'digest.json'), 'utf8')), GOOD);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'digest.json'), 'utf8')), GOOD_R1);
 });
 
 test('three failures: failed with problems, existing digest untouched, no prev file', async (t) => {
@@ -394,4 +396,76 @@ test('a Claude account from selectAgent: label in the job, its dir only passed t
   assert.equal(c.calls[0].configDir, '/h/.claude/yvin');
   assert.doesNotMatch(JSON.stringify(c.jobs.get('p1')), /\.claude\/yvin/);
   assert.deepEqual(recorded, [{ agent: 'claude', profile: 'claude-yvin', model: 'claude-sonnet-4-5' }]);
+});
+
+// --- regenerate keeps memos/progress from landing on other cards (Ruling I-2) ---
+
+const idsOf = async (out, id) => JSON.parse(await fs.readFile(path.join(out, id, 'digest.json'), 'utf8')).cards.map((c) => c.id);
+
+test('replacing a digest gives the new cards fresh ids (-r1, then -r2); a first digest keeps the AI ids', async (t) => {
+  const runs = [];
+  const c = await setup(t, { runs });
+  const memos = { version: 1, cardMemos: { c3: 'my memo on the old c3' } };
+  await fs.writeFile(path.join(c.out, 'p1', 'notes.json'), JSON.stringify(memos));
+  runs.push(c.writeDigest(GOOD), c.writeDigest(GOOD));
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.jobs.get('p1').state, 'done', c.jobs.get('p1').message);
+  assert.deepEqual(await idsOf(c.out, 'p1'), GOOD.cards.map((x) => `${x.id}-r1`));
+  const stored = JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'digest.json'), 'utf8'));
+  assert.deepEqual({ ...stored, cards: stored.cards.map(({ id, ...rest }) => rest) }, { ...GOOD, cards: GOOD.cards.map(({ id, ...rest }) => rest) });
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.jobs.get('p1').state, 'done');
+  assert.deepEqual(await idsOf(c.out, 'p1'), GOOD.cards.map((x) => `${x.id}-r2`));
+  // notes are never touched by the job: the old memo stays under its old id
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'notes.json'), 'utf8')), memos);
+});
+
+test('revision suffix follows the highest one in the old ids; AI-written suffixes are replaced, not stacked', async (t) => {
+  const runs = [];
+  const c = await setup(t, { runs });
+  const old = { ...GOOD, cards: GOOD.cards.map((x, i) => ({ ...x, id: i === 0 ? 'c1-r4' : `${x.id}-r2` })) };
+  await fs.writeFile(path.join(c.out, 'p1', 'digest.json'), JSON.stringify(old));
+  const fromAi = { ...GOOD, cards: GOOD.cards.map((x, i) => ({ ...x, id: i === 1 ? 'c2-r4' : x.id })) };
+  runs.push(c.writeDigest(fromAi));
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.jobs.get('p1').state, 'done', c.jobs.get('p1').message);
+  assert.deepEqual(await idsOf(c.out, 'p1'), GOOD.cards.map((x) => `${x.id}-r5`));
+});
+
+test('folder PDF that merges into a paper with a digest: done without running the AI (Ruling I-3)', async (t) => {
+  const runs = [];
+  let c;
+  const extract = async () => ({ id: 'p1', state: 'digest', merged: true });
+  c = await setup(t, { runs, pdfIds: ['f1'], extract });
+  await c.jobs.start('f1');
+  await settled(c.jobs, 'f1');
+  const job = c.jobs.get('f1');
+  assert.equal(job.state, 'done');
+  assert.equal(job.message, "이미 요약이 있는 논문입니다. 다시 만들려면 논문 화면에서 '요약 다시 만들기'를 누르세요.");
+  assert.equal(job.paperId, 'p1');
+  assert.equal(job.existing, true);
+  assert.equal(c.jobs.get('p1').state, 'done');
+  assert.equal(c.calls.length, 0);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'digest.json'), 'utf8')), OLD);
+  assert.equal(await exists(path.join(c.out, 'p1', 'digest.prev.json')), false);
+});
+
+test('folder PDF that merges into an extracted paper without a digest still runs the AI', async (t) => {
+  const runs = [];
+  let c;
+  const extract = async () => {
+    await fs.mkdir(path.join(c.out, 'z1'), { recursive: true });
+    await fs.writeFile(path.join(c.out, 'z1', 'source.json'), JSON.stringify({ ...SOURCE, id: 'z1' }));
+    return { id: 'z1', state: 'extracted', merged: true };
+  };
+  c = await setup(t, { runs, pdfIds: ['f1'], extract });
+  runs.push(c.writeDigest({ ...GOOD, paperId: 'z1' }));
+  await c.jobs.start('f1');
+  await settled(c.jobs, 'f1');
+  assert.equal(c.jobs.get('f1').state, 'done', c.jobs.get('f1').message);
+  assert.equal(c.calls.length, 1);
+  assert.deepEqual(await idsOf(c.out, 'z1'), GOOD.cards.map((x) => x.id));
 });

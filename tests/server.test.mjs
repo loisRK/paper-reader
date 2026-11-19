@@ -355,6 +355,8 @@ test('PUT card memo then GET notes shows it; empty deletes; too long 400', async
   assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: 'x'.repeat(5001) })).status, 400);
   assert.equal((await req('PUT', '/api/papers/n1/card-memos/c1', { text: 3 })).status, 400);
   assert.equal((await req('PUT', '/api/papers/n1/card-memos/bad%20id!', { text: 'x' })).status, 400);
+  // memos of cards from an earlier digest are read-only
+  assert.equal((await req('PUT', '/api/papers/n1/card-memos/c99', { text: 'x' })).status, 404);
 });
 
 test('note-conflict resolves; invalid choice 400', async (t) => {

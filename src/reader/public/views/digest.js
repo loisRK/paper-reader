@@ -14,7 +14,7 @@ export function jobView(job) {
     case 'writing': return { text: `요약 쓰는 중… (${job.attempt}/${max}번째)`, busy: true, tone: 'info' };
     case 'checking': return { text: '검증 중…', busy: true, tone: 'info' };
     case 'retrying': return { text: `검증 문제 ${job.problems?.length ?? 0}건 — 다시 쓰는 중 (${job.attempt}/${max}번째)`, busy: true, tone: 'info' };
-    case 'done': return { text: '요약을 만들었습니다', busy: false, tone: 'ok' };
+    case 'done': return job.existing && job.message ? { text: job.message, busy: false, tone: 'info' } : { text: '요약을 만들었습니다', busy: false, tone: 'ok' };
     case 'failed': {
       const m = job.message?.trim();
       const text = !m ? FAIL_PREFIX : m.startsWith(FAIL_PREFIX) ? m : `${FAIL_PREFIX}: ${m}`;

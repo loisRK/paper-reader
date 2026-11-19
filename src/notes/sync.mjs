@@ -23,14 +23,20 @@ const escapeHtml = (s) => String(s)
   .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
   .replace(/"/g, '&quot;').replace(/'/g, '&#39;');
 
+// Memos whose card is gone (the digest was regenerated with new card ids) follow under their own heading.
 export function noteHtml(cards, cardMemos) {
+  const list = Array.isArray(cards) ? cards : [];
+  const para = (text) => `<p>${escapeHtml(text).replace(/\r?\n/g, '<br>')}</p>`;
+  const filled = (text) => typeof text === 'string' && text.trim();
   let html = '<h1>Paper Reader 메모</h1>';
-  (Array.isArray(cards) ? cards : []).forEach((card, i) => {
+  list.forEach((card, i) => {
     const text = cardMemos?.[card.id];
-    if (typeof text !== 'string' || !text.trim()) return;
-    html += `<h2>${i + 1}. ${escapeHtml(card.question ?? '')}</h2>`
-      + `<p>${escapeHtml(text).replace(/\r?\n/g, '<br>')}</p>`;
+    if (!filled(text)) return;
+    html += `<h2>${i + 1}. ${escapeHtml(card.question ?? '')}</h2>${para(text)}`;
   });
+  const ids = new Set(list.map((c) => c?.id));
+  const old = Object.entries(cardMemos ?? {}).filter(([id, text]) => !ids.has(id) && filled(text));
+  if (old.length) html += `<h2>이전 요약의 메모</h2>${old.map(([, text]) => para(text)).join('')}`;
   return html;
 }
 
