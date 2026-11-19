@@ -13,6 +13,15 @@ const TAB_KEY = 'paper-reader:source-tab';
 
 // ---------- pure helpers (tested in Node) ----------
 
+// The takeaway as the first card's model (null when there is none). Not part of the read progress.
+export function takeawayCard(tk) {
+  if (!tk?.text) return null;
+  return {
+    id: 'takeaway', num: '0', label: '핵심', text: tk.text, evidence: tk.evidence ?? [],
+    whyLabel: tk.why ? '저자들이 밝힌 기여' : null, why: tk.why || null,
+  };
+}
+
 export function visibleItems(card, mode) {
   if (mode === '3min') return [];
   // Only the paper's own claims are shown; an old digest's opinion items never render.
@@ -399,7 +408,8 @@ export function render(container, data, actions) {
   function markCurrentEvidence() {
     for (const n of source_.querySelectorAll('.sent.ev-on')) n.classList.remove('ev-on');
     const card = cards.find((c) => c.id === state.current);
-    const ids = card ? cardEvidence(card, state.mode) : [];
+    const tkc = takeawayCard(digest?.takeaway);
+    const ids = card ? cardEvidence(card, state.mode) : (state.current === 'takeaway' && tkc ? tkc.evidence : []);
     for (const sid of ids) sentenceEl(sid)?.classList.add('ev-on');
     pdf.view?.setEvidence(ids);
   }
@@ -544,7 +554,7 @@ export function render(container, data, actions) {
     const done = [...state.read].filter((r) => ids.has(r)).length;
     progressSlot.replaceChildren(
       progressBar(done, cards.length, '읽은 카드 비율'),
-      el('span', { class: 'progress-text', text: `${done}/${cards.length} 읽음` }),
+      el('span', { class: 'progress-text', text: `${done}/${cards.length}`, title: '읽음' }),
     );
   }
 
@@ -592,6 +602,23 @@ export function render(container, data, actions) {
     return node;
   }
 
+  function takeawayNode(tkc) {
+    return el('article', {
+      class: `card takeaway-card${state.current === tkc.id ? ' current' : ''}`,
+      dataset: { cardId: tkc.id },
+      'aria-labelledby': 'q-takeaway',
+      'aria-current': state.current === tkc.id ? 'true' : null,
+      onclick: () => setCurrent(tkc.id),
+    },
+    el('div', { class: 'card-head' },
+      el('span', { class: 'card-num', text: tkc.num }),
+      el('span', { class: 'section-tag', text: tkc.label }),
+    ),
+    el('h2', { class: 'question takeaway-text', id: 'q-takeaway' }, tkc.text, evidenceButton(tkc.evidence, showEvidence, tkc.id)),
+    tkc.why ? el('p', { class: 'takeaway-why' }, el('strong', { class: 'item-label', text: tkc.whyLabel }), ' ', tkc.why) : null,
+    );
+  }
+
   let observer = null;
   function renderFlow() {
     observer?.disconnect();
@@ -613,6 +640,8 @@ export function render(container, data, actions) {
     memos?.reset();
     if (memos) flow.append(memos.bannerNode);
     const seen = new Set();
+    const tkc = takeawayCard(digest?.takeaway);
+    if (tkc) flow.append(takeawayNode(tkc));
     cards.forEach((card, idx) => {
       flow.append(cardNode(card, idx, seen));
       if (card.bridge && idx < cards.length - 1) {
@@ -665,22 +694,16 @@ export function render(container, data, actions) {
     : null;
   const notesStatus = notesCtl?.statusNode ?? null;
 
-  const tk = digest?.takeaway;
   const topbar = el('header', { class: 'topbar' },
     el('div', { class: 'topbar-row' },
       el('a', { class: 'back', href: '#/', text: '← 목록' }),
       el('h1', { class: 'paper-title', tabindex: -1, text: source.meta?.title || data.id }),
+      cards.length ? progressSlot : null,
       cards.length ? el('div', { class: 'controls' }, modeGroup, focusBtn) : null,
       digest ? dj.button : null,
       el('button', { type: 'button', class: 'btn btn-quiet sheet-open', 'aria-controls': 'source-panel', text: '원문 보기', onclick: () => setSheet(true) }),
     ),
     digest ? dj.box : null,
-    tk?.text ? el('div', { class: 'takeaway' },
-      el('span', { class: 'takeaway-label', text: '핵심' }),
-      el('p', { class: 'takeaway-text' }, tk.text, evidenceButton(tk.evidence, showEvidence, null)),
-      tk.why ? el('p', { class: 'takeaway-why', text: tk.why }) : null,
-    ) : null,
-    cards.length ? progressSlot : null,
     notesStatus,
   );
 

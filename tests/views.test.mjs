@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
-import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
+import { takeawayCard, visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
 import { nextZoom, pagesToDraw, pdfErrorMessage } from '../src/reader/public/views/pdf-view.js';
 import { progressPercent, tileState, folderPreview, hashingText } from '../src/reader/public/views/list.js';
 
@@ -100,7 +100,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction, pdfSelectionResult, pdfMarkLayers, pdfPointSentence, toolbarAction } from '../src/reader/public/views/notes.js';
+import { statusVisible, selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction, pdfSelectionResult, pdfMarkLayers, pdfPointSentence, toolbarAction } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -625,4 +625,25 @@ import { profileOptionText } from '../src/reader/public/views/list.js';
 test('profileOptionText: alias · email', () => {
   assert.equal(profileOptionText({ label: 'claude-yvin', email: 'y@x.com' }), 'claude-yvin · y@x.com');
   assert.equal(profileOptionText({ label: 'claude', email: '로그인 정보 없음' }), 'claude · 로그인 정보 없음');
+});
+
+test('statusVisible: shown only when the user must act or should know', () => {
+  for (const status of ['connected', 'local', 'example', 'readonly']) assert.equal(statusVisible({ status, pending: 0, failed: 0 }), false, status);
+  for (const status of ['needs-auth', 'denied', 'rate-limited']) assert.equal(statusVisible({ status }), true, status);
+  assert.equal(statusVisible({ status: 'offline', pending: 0 }), false);
+  assert.equal(statusVisible({ status: 'offline', pending: 2 }), true);
+  assert.equal(statusVisible({ status: 'connected', failed: 1 }), true);
+  assert.equal(statusVisible({ status: 'connected', note: { conflict: { mine: {} } } }), true);
+  assert.equal(statusVisible(null), false);
+});
+
+test('takeawayCard: the first, unnumbered-in-progress card model', () => {
+  assert.equal(takeawayCard(null), null);
+  assert.equal(takeawayCard({ text: '' }), null);
+  const c = takeawayCard({ text: '핵심 문장', why: '이유', evidence: ['s1'] });
+  assert.deepEqual(c, { id: 'takeaway', num: '0', label: '핵심', text: '핵심 문장', evidence: ['s1'], whyLabel: '저자들이 밝힌 기여', why: '이유' });
+  const d = takeawayCard({ text: 'x' });
+  assert.equal(d.why, null);
+  assert.equal(d.whyLabel, null);
+  assert.deepEqual(d.evidence, []);
 });

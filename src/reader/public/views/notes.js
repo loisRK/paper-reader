@@ -94,6 +94,16 @@ export function statusText(status, pending) {
   }
 }
 
+// Whether the status line is worth showing: only when the user must act or should know.
+// Connected / local / example / read-only are quiet (the home list shows the Zotero tag).
+export function statusVisible(n) {
+  if (!n) return false;
+  if (n.status === 'needs-auth' || n.status === 'denied' || n.status === 'rate-limited') return true;
+  if (n.status === 'offline' && (n.pending ?? 0) > 0) return true;
+  if ((n.failed ?? 0) > 0) return true;
+  return Boolean(n.note?.conflict);
+}
+
 // The popover's textarea holds an edit that is not saved yet.
 export const needsCommentSave = (original, current) => typeof current === 'string' && current !== (original ?? '');
 
@@ -239,13 +249,12 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   // ----- status badge -----
   function renderStatus() {
     const n = s.notes;
-    if (!s.lastJson) { statusNode.replaceChildren(); return; }
+    if (!s.lastJson || !statusVisible(n)) { statusNode.className = 'notes-status'; statusNode.replaceChildren(); return; }
     const needsAuth = n.status === 'needs-auth' || n.status === 'denied';
     statusNode.className = `notes-status st-${n.status}`;
     setChildren(statusNode,
-      n.status === 'local'
-        ? el('span', { class: 'muted st-hint', text: statusText('local') })
-        : el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
+      ['connected', 'local', 'example', 'readonly'].includes(n.status) ? null : el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
+      n.note?.conflict ? el('span', { class: 'st-badge st-failed', text: 'Zotero 노트가 바뀌어 확인이 필요합니다' }) : null,
       n.failed > 0 ? el('span', { class: 'st-badge st-failed', text: failedText(n.failed), title: n.failedMessage ?? '' }) : null,
       needsAuth ? el('button', {
         type: 'button', class: 'btn btn-quiet', text: 'Zotero 쓰기 허용', 'aria-label': 'Zotero 쓰기 허용 요청',
