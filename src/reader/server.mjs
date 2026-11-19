@@ -30,6 +30,9 @@ function sendJson(res, status, body) {
 }
 
 async function readBody(req) {
+  if (!/^application\/json\s*(;|$)/i.test(req.headers['content-type'] ?? '')) {
+    throw new HttpError(415, 'Content-Type은 application/json이어야 합니다.');
+  }
   const chunks = [];
   let size = 0;
   for await (const chunk of req) {
@@ -92,6 +95,10 @@ export function createServer(cfg, deps = {}) {
   const out = cfg.outputDir;
 
   async function route(req, res) {
+    const port = server.address()?.port;
+    if (req.headers.host !== `127.0.0.1:${port}` && req.headers.host !== `localhost:${port}`) {
+      throw new HttpError(403, '허용되지 않은 Host입니다.');
+    }
     const url = new URL(req.url, 'http://127.0.0.1');
     const parts = url.pathname.split('/').filter(Boolean).map((s) => { try { return decodeURIComponent(s); } catch { throw new HttpError(400, '잘못된 경로입니다.'); } });
     const { method } = req;
@@ -128,8 +135,8 @@ export function createServer(cfg, deps = {}) {
       return sendJson(res, 200, {
         source: b.source, digest, problems, progress: b.progress,
         links: {
-          zoteroPdf: `zotero://open-pdf/library/items/${z.attachmentKey}`,
-          zoteroItem: `zotero://select/library/items/${z.itemKey}`,
+          zoteroPdf: z.attachmentKey ? `zotero://open-pdf/library/items/${z.attachmentKey}` : null,
+          zoteroItem: z.itemKey ? `zotero://select/library/items/${z.itemKey}` : null,
         },
       });
     }
@@ -168,7 +175,7 @@ export function createServer(cfg, deps = {}) {
     throw new HttpError(404, '찾을 수 없습니다.');
   }
 
-  return http.createServer(async (req, res) => {
+  const server = http.createServer(async (req, res) => {
     try {
       await route(req, res);
     } catch (err) {
@@ -180,6 +187,7 @@ export function createServer(cfg, deps = {}) {
       sendJson(res, 500, { error: `서버 오류: ${err.message}` });
     }
   });
+  return server;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {

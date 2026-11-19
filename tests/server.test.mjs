@@ -38,6 +38,8 @@ before(async () => {
   await fs.mkdir(path.join(dir, 'p2'));
   await fs.writeFile(path.join(dir, 'p2', 'source.json'), JSON.stringify({ ...source, id: 'p2', meta: { title: 'T2' } }));
   await fs.writeFile(path.join(dir, 'p2', 'digest.json'), '{broken');
+  await fs.mkdir(path.join(dir, 'p3'));
+  await fs.writeFile(path.join(dir, 'p3', 'source.json'), JSON.stringify({ id: 'p3', meta: { title: 'T3' } }));
   await fs.mkdir(path.join(dir, '_search'));
   await fs.writeFile(path.join(dir, '_search', '2026-01-01-a.json'), JSON.stringify(search));
   await fs.writeFile(path.join(dir, '_search', '2026-02-01-b.json'), JSON.stringify(search));
@@ -121,10 +123,33 @@ test('serves index.html at / and blocks static traversal', async () => {
       let buf = ''; s.on('data', (d) => { buf += d; }); s.on('end', () => resolve(buf));
     });
   });
-  assert.match(raw, /^HTTP\/1.1 (400|404)/);
+  assert.match(raw, /^HTTP\/1.1 (400|403|404)/);
 });
 
 test('oversized body returns 413', async () => {
-  const res = await fetch(`${base}/api/register`, { method: 'POST', body: 'x'.repeat(1024 * 1024 + 10) });
+  const res = await fetch(`${base}/api/register`, { method: 'POST', headers: { 'content-type': 'application/json' }, body: 'x'.repeat(1024 * 1024 + 10) });
   assert.equal(res.status, 413);
+});
+
+test('rejects non-JSON content type with 415', async () => {
+  const res = await fetch(`${base}/api/register`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{"search":"2026-01-01-a","n":1}' });
+  assert.equal(res.status, 415);
+  assert.equal((await res.json()).error, 'Content-Type은 application/json이어야 합니다.');
+  const ok = await post('/api/register', { search: '2026-01-01-a', n: 1 });
+  assert.equal(ok.status, 200);
+});
+
+test('rejects foreign Host header with 403', async () => {
+  const { default: http } = await import('node:http');
+  const status = (p, host) => new Promise((resolve, reject) => {
+    http.get({ host: '127.0.0.1', port: server.address().port, path: p, headers: { Host: host } }, (r) => { r.resume(); resolve(r.statusCode); }).on('error', reject);
+  });
+  assert.equal(await status('/api/papers', 'evil.example'), 403);
+  assert.equal(await status('/', 'evil.example'), 403);
+  assert.equal(await status('/api/papers', `localhost:${server.address().port}`), 200);
+});
+
+test('missing zotero keys give null links', async () => {
+  const body = await (await fetch(`${base}/api/papers/p3`)).json();
+  assert.deepEqual(body.links, { zoteroPdf: null, zoteroItem: null });
 });

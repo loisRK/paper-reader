@@ -1,5 +1,6 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
+import crypto from 'node:crypto';
 
 export const NAME_RE = /^[\w.\-]+$/;
 export const isSafeName = (s) => typeof s === 'string' && NAME_RE.test(s) && s !== '.' && s !== '..';
@@ -54,7 +55,7 @@ export async function readPaper(outputDir, id) {
 export async function writeProgress(outputDir, id, progress) {
   const dir = path.join(outputDir, id);
   const file = path.join(dir, 'progress.json');
-  const tmp = `${file}.tmp`;
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(progress, null, 2));
   await fs.rename(tmp, file);
 }
