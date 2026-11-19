@@ -113,6 +113,7 @@ test('statusText: per status', () => {
   assert.equal(statusText('denied', 0), 'Zotero 쓰기 허용이 필요합니다');
   assert.equal(statusText('rate-limited', 0), 'Zotero 허용 요청이 많아 잠시 후 다시 시도합니다');
   assert.equal(statusText('readonly', 0), 'Zotero 10 이상에서만 메모를 Zotero로 보낼 수 있습니다. 메모는 이 컴퓨터에 저장됩니다.');
+  assert.equal(statusText('local', 3), '이 컴퓨터에만 저장됩니다');
   assert.equal(statusText('example', 0), '예제 논문에는 메모를 저장하지 않습니다.');
 });
 

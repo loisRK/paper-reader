@@ -967,3 +967,38 @@ test('addHighlight validates input', async () => {
   await assert.rejects(() => addHighlight(dir, ID, { sentenceIds: [], color: '#ffd400' }));
   await assert.rejects(() => addHighlight(dir, ID, { sentenceIds: [1], color: '#ffd400' }));
 });
+
+test('unlinked paper: status local, no message, pending kept, writer untouched (even if Zotero is off)', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ff6666', comment: 'c' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w = fakeWriter();
+  const before = (await readPending(dir, ID)).ops.length;
+  assert.ok(before >= 2);
+  for (const info of [ONLINE, { running: false, message: 'Zotero가 꺼져 있습니다.' }]) {
+    for (const z of [undefined, null, { itemKey: null, attachmentKey: null }]) {
+      const src = { ...source, zotero: z };
+      const r = await syncPaper(dir, ID, { source: src, cards, writer: w, serverInfo: info });
+      assert.deepEqual(r, { status: 'local', pending: before, message: null, failed: 0, failedMessage: null });
+    }
+  }
+  assert.deepEqual(w.calls, []);
+  assert.equal((await readPending(dir, ID)).ops.length, before);
+});
+
+test('memos queued while local are sent after the paper gets linked', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ff6666', comment: 'a' });
+  await addHighlight(dir, ID, { sentenceIds: ['p2-s1'], color: '#ff6666', comment: 'b' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w = fakeWriter();
+  const r1 = await syncPaper(dir, ID, { source: { ...source, zotero: undefined }, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r1.status, 'local');
+  const r2 = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r2.status, 'connected');
+  assert.equal(r2.pending, 0);
+  const notes = await readNotes(dir, ID);
+  assert.equal(notes.highlights.filter((h) => h.zoteroKey).length, 2);
+  assert.ok(notes.note.zoteroKey, 'card memo note created');
+  assert.equal(w.calls.filter((c) => c === 'createItems').length >= 1, true);
+});

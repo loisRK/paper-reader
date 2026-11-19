@@ -375,6 +375,7 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .st-badge { padding: .1rem .6rem; border-radius: 999px; background: var(--surface-2); border: 1px solid var(--line); }
 .st-connected .st-badge { background: var(--accent-soft); color: var(--accent-strong); border-color: transparent; }
 .st-needs-auth .st-badge, .st-denied .st-badge, .st-rate-limited .st-badge, .notes-status .st-failed { background: var(--warn-bg); color: var(--warn-text); border-color: var(--warn-line); }
+.st-local .st-hint { color: var(--muted); }
 .sent.mark-mine { background: color-mix(in srgb, var(--mark, #ffd400) 38%, transparent); cursor: pointer; }
 .sent.mark-zot { text-decoration: underline dotted var(--accent) 2px; text-underline-offset: 4px; cursor: pointer; }
 .sent.mark-zot::after { content: "🟡"; font-size: .7em; margin-left: .15em; }

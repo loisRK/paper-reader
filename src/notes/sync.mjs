@@ -408,9 +408,11 @@ async function runSync(outputDir, id, { source, cards, writer, serverInfo }) {
     return { status, pending: pending.ops.length, message, failed: failed.length, failedMessage: failed[0]?.error ?? null };
   };
 
-  if (!serverInfo?.running) return done('offline', serverInfo?.message ?? null);
+  // Not linked to a Zotero item (folder PDF without a match): a quiet local-only state. Checked before
+  // the server so it never looks like an outage; queued ops stay until source.zotero appears.
   const { itemKey, attachmentKey } = source?.zotero ?? {};
-  if (!itemKey || !attachmentKey) return done('offline', '이 논문은 Zotero 항목과 연결되어 있지 않습니다.');
+  if (!itemKey || !attachmentKey) return done('local');
+  if (!serverInfo?.running) return done('offline', serverInfo?.message ?? null);
 
   const ctx = {
     id, notes, pending, writer, source, cards, itemKey, attachmentKey, wrote: false,

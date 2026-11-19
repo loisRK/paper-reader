@@ -88,6 +88,7 @@ export function statusText(status, pending) {
     case 'needs-auth':
     case 'denied': return 'Zotero 쓰기 허용이 필요합니다';
     case 'rate-limited': return 'Zotero 허용 요청이 많아 잠시 후 다시 시도합니다';
+    case 'local': return '이 컴퓨터에만 저장됩니다';
     case 'example': return EXAMPLE_TEXT;
     default: return READONLY_TEXT;
   }
@@ -242,7 +243,9 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     const needsAuth = n.status === 'needs-auth' || n.status === 'denied';
     statusNode.className = `notes-status st-${n.status}`;
     setChildren(statusNode,
-      el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
+      n.status === 'local'
+        ? el('span', { class: 'muted st-hint', text: statusText('local') })
+        : el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
       n.failed > 0 ? el('span', { class: 'st-badge st-failed', text: failedText(n.failed), title: n.failedMessage ?? '' }) : null,
       needsAuth ? el('button', {
         type: 'button', class: 'btn btn-quiet', text: 'Zotero 쓰기 허용', 'aria-label': 'Zotero 쓰기 허용 요청',
