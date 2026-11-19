@@ -610,12 +610,12 @@ def test_table_right_above_a_figure_is_not_merged_into_it(tmp_path):
 
 
 def test_figure_detection_error_keeps_text_and_leaves_figures_empty(tmp_path, monkeypatch, capsys):
-    import extract_pdf
+    import figure_regions
 
     def boom(*_a, **_k):
         raise RuntimeError("broken drawing")
 
-    monkeypatch.setattr(extract_pdf, "_candidates", boom)
+    monkeypatch.setattr(figure_regions, "_candidates", boom)
     pdf = make_figure_pdf(tmp_path / "err.pdf")
     result = extract(pdf)
     assert result["sentences"] == extract(pdf, detect_figures=False)["sentences"]
@@ -733,3 +733,72 @@ def test_full_width_table_above_a_right_column_figure_stays_out_of_it(tmp_path):
     t4, f7 = _figure(result, "Table 4")["bbox"], _figure(result, "Figure 7")["bbox"]
     assert t4[0] <= 55 and t4[2] >= 541 and t4[3] <= 165
     assert f7[1] >= 150 and f7[0] >= 306 and f7[2] >= 520
+
+
+def _stacked_pdf(path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    _box(page, (94, 262, 251, 280), "Table 5. Occurrences.", 9)
+    _booktabs(page, 58, 284, (282, 296, 325), ["Agent find echo", "REACT 0 0"])
+    page.draw_rect(pymupdf.Rect(70, 335, 280, 470), fill=(0, 1, 0))
+    _box(page, (55, 476, 280, 494), "Figure 6. Actions taken.", 9)
+    for y in (70, 160):
+        _box(page, (55, y, 290, y + 80), FILLER + " " + FILLER, 9)
+    for y in (70, 185, 300, 415):
+        _box(page, (330, y, 560, y + 100), BODY, 9)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def test_failed_render_drops_only_that_figures_image(tmp_path, monkeypatch, capsys):
+    import figure_regions
+
+    real, calls = figure_regions._render, []
+
+    def flaky(page, region, path):
+        calls.append(path)
+        if len(calls) == 2:
+            raise RuntimeError("render failed")
+        real(page, region, path)
+
+    monkeypatch.setattr(figure_regions, "_render", flaky)
+    figdir = tmp_path / "figures"
+    figdir.mkdir()
+    pdf = _stacked_pdf(tmp_path / "flaky.pdf")
+    result = extract(pdf, figures_dir=str(figdir))
+    baseline = _figure(extract(pdf), "Figure 6")
+    t5, f6 = _figure(result, "Table 5"), _figure(result, "Figure 6")
+    assert len(calls) == 2
+    assert t5["image"] == "fig-1-1.png" and (figdir / "fig-1-1.png").exists()
+    assert f6["image"] is None
+    assert f6["bbox"] == baseline["bbox"] is not None and f6["blockIds"] == baseline["blockIds"]
+    assert not (figdir / "fig-1-2.png").exists()
+    assert "Figure 6 이미지를 저장하지 못했습니다" in capsys.readouterr().err
+
+
+def test_caption_extent_without_line_boxes_uses_block_bbox():
+    import figure_regions
+
+    cap = figure_regions.TextBlock(bbox=(55, 100, 280, 112), btype="caption", text="Figure 1. X.",
+                                   size=9, lines=[], sids=["p1-s1"], block={"id": "b1"})
+    after = figure_regions.TextBlock(bbox=(55, 113, 280, 125), btype="paragraph", text="more caption",
+                                     size=9, lines=[], sids=["p1-s2"], block={"id": "b2"})
+    assert figure_regions._caption_extent(cap, [cap, after]) == (55, 100, 280, 112)
+
+
+def test_stale_crops_are_removed_and_other_files_kept(tmp_path):
+    figdir = tmp_path / "figures"
+    (figdir / "sub").mkdir(parents=True)
+    for name in ("fig-9-9.png", "fig-1-1.png"):
+        (figdir / name).write_bytes(b"old")
+    keep = ["notes.txt", "fig-1-1.png.bak", "fig-a-1.png", "fig-1-1.jpg", "my-fig-1-1.png"]
+    for name in keep:
+        (figdir / name).write_text("keep")
+    (figdir / "sub" / "fig-2-2.png").write_bytes(b"nested")
+    extract(make_figure_pdf(tmp_path / "stale.pdf"), figures_dir=str(figdir))
+    assert not (figdir / "fig-9-9.png").exists()
+    assert (figdir / "fig-1-1.png").read_bytes()[:4] == b"\x89PNG"     # rewritten, not the old one
+    for name in keep:
+        assert (figdir / name).read_text() == "keep"
+    assert (figdir / "sub" / "fig-2-2.png").read_bytes() == b"nested"
