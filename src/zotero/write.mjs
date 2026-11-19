@@ -127,7 +127,16 @@ export function createZoteroWriter(cfg, opts = {}) {
     }
     if (res.status === 412) await check412(res, id);
     if (res.status !== 200) throw new ZoteroWriteError('http', `Zotero 인가 실패: HTTP ${res.status}`, { status: res.status });
-    const { key, remember } = await res.json();
+    let body;
+    try {
+      body = await res.json();
+    } catch {
+      throw new ZoteroWriteError('http', 'Zotero 인가 응답을 해석할 수 없습니다.', { status: res.status });
+    }
+    const { key, remember } = body ?? {};
+    if (typeof key !== 'string' || !key) {
+      throw new ZoteroWriteError('http', 'Zotero 인가 응답에 키가 없습니다.', { status: res.status });
+    }
     if (remember) await authStore.set(id, key);
     else onceKey = key;
     return { remember: Boolean(remember) };
@@ -138,7 +147,6 @@ export function createZoteroWriter(cfg, opts = {}) {
     const id = await serverId();
     const key = onceKey ?? (await authStore.get(id));
     if (!key) throw new ZoteroWriteError('needs-auth', 'Zotero 인가가 필요합니다.');
-    onceKey = null; // single-use keys are consumed by the attempt
     const res = await call(fetchImpl, `${base}${pathname}`, {
       method,
       headers: {
@@ -155,6 +163,8 @@ export function createZoteroWriter(cfg, opts = {}) {
     }
     if (res.status === 412) await check412(res, id);
     if (!res.ok) throw new ZoteroWriteError('http', `Zotero 쓰기 실패: HTTP ${res.status}`, { status: res.status });
+    // Single-use key is consumed only on success (or 401/server-changed, handled above).
+    if (onceKey === key) onceKey = null;
     return res;
   }
 
@@ -175,12 +185,15 @@ export function createZoteroWriter(cfg, opts = {}) {
       const out = await res.json();
       return { success: out.success ?? {}, successful: out.successful ?? {}, failed: out.failed ?? {} };
     },
+    // Returns the new item version, or null if Zotero sent no valid Last-Modified-Version
+    // (caller should then refetch via getItem instead of storing a bogus version).
     async patchItem(key, version, data) {
       const res = await write('PATCH', `/api/users/0/items/${key}`, {
         body: data,
         headers: { 'If-Unmodified-Since-Version': String(version) },
       });
-      return Number.parseInt(res.headers.get('Last-Modified-Version') ?? '', 10);
+      const v = Number.parseInt(res.headers.get('Last-Modified-Version') ?? '', 10);
+      return Number.isFinite(v) ? v : null;
     },
     async deleteItem(key, version) {
       await write('DELETE', `/api/users/0/items/${key}`, {

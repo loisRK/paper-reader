@@ -219,3 +219,46 @@ test('fileAuthStore writes mode 0o600 and round-trips', async () => {
   assert.equal((await fs.readdir(path.dirname(file))).length, 1);
   await fs.rm(dir, { recursive: true });
 });
+
+test('remember:false key survives offline and version-conflict 412; consumed on success', async () => {
+  let mode = 'offline';
+  const f = fakeFetch((u, init) => {
+    if (isAuthz(u)) return res(200, { key: 'ONCE', remember: false });
+    if (init.method === 'PATCH') {
+      if (mode === 'offline') throw new TypeError('down');
+      if (mode === '412') return res(412, '', { 'Zotero-Server-ID': SID });
+      if (mode === '500') return res(500, '');
+      return res(204, '', { 'Last-Modified-Version': '3' });
+    }
+  });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore() });
+  await w.authorize();
+  await rejectsCode(w.patchItem('ABCD1234', 1, {}), 'offline');
+  mode = '412';
+  await rejectsCode(w.patchItem('ABCD1234', 1, {}), 'http');
+  mode = '500';
+  await rejectsCode(w.patchItem('ABCD1234', 1, {}), 'http');
+  mode = 'ok';
+  assert.equal(await w.patchItem('ABCD1234', 1, {}), 3);
+  assert.equal(f.calls.filter((c) => c.method === 'PATCH').at(-1).headers['Zotero-API-Key'], 'ONCE');
+  await rejectsCode(w.patchItem('ABCD1234', 3, {}), 'needs-auth');
+});
+
+test('patchItem returns null when Last-Modified-Version is missing or invalid', async () => {
+  const f = fakeFetch((u, init) => { if (init.method === 'PATCH') return res(204, ''); });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: memStore({ [SID]: 'K' }) });
+  assert.equal(await w.patchItem('ABCD1234', 1, {}), null);
+});
+
+test('authorize 200 with missing key or bad JSON -> http error', async () => {
+  const bad = (body) => {
+    const r = res(200, body);
+    return r;
+  };
+  const f1 = fakeFetch((u) => { if (isAuthz(u)) return bad({ remember: true }); });
+  await rejectsCode(createZoteroWriter(CFG, { fetchImpl: f1, authStore: memStore() }).authorize(), 'http');
+  const f2 = fakeFetch((u) => {
+    if (isAuthz(u)) { const r = res(200, ''); r.json = async () => { throw new SyntaxError('x'); }; return r; }
+  });
+  await rejectsCode(createZoteroWriter(CFG, { fetchImpl: f2, authStore: memStore() }).authorize(), 'http');
+});
