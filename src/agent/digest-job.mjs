@@ -16,6 +16,7 @@ export const NO_AGENT_MESSAGE = '쓸 수 있는 AI 도구가 없습니다. Claud
 export const BUSY_MESSAGE = '다른 논문의 요약을 만들고 있습니다.';
 export const EXAMPLE_MESSAGE = '예제 논문은 요약을 다시 만들 수 없습니다.';
 export const NOT_FOUND_MESSAGE = '논문을 찾을 수 없습니다.';
+export const UNEXPECTED_MESSAGE = '요약을 만들지 못했습니다. 기존 요약은 그대로입니다. 서버 로그를 확인하세요.';
 export const TIMEOUT_MESSAGE = '시간이 너무 오래 걸려 멈췄습니다.';
 
 export class DigestJobError extends Error {
@@ -26,6 +27,17 @@ export class DigestJobError extends Error {
 }
 
 const firstLine = (err) => String(err?.message ?? err).split('\n')[0];
+
+const baseOf = (p) => p.replace(/[\\/]+$/, '').split(/[\\/]/).pop() || '…';
+const QUOTED_PATH = /(['"`])((?:~|[A-Za-z]:)?[\\/][^'"`\n]*)\1/g;
+const BARE_PATH = /(^|[\s(\[=,:])((?:~|[A-Za-z]:)?[\\/](?:[^\s'"`\\/)\]]+[\\/])+[^\s'"`\\/)\]]*)/g;
+
+/** Replaces absolute (or ~/) file paths in text with their basename, so job state never carries personal paths. */
+export function redactPaths(text) {
+  return String(text ?? '')
+    .replace(QUOTED_PATH, (m, q, p) => `${q}${baseOf(p)}${q}`)
+    .replace(BARE_PATH, (m, pre, p) => (/^[\\/]{2}/.test(p) ? m : `${pre}${baseOf(p)}`));
+}
 
 /**
  * One digest job at a time (any paper). deps:
@@ -56,7 +68,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
   const snapshot = (job) => (job ? { ...job, log: [...job.log], ...(job.problems ? { problems: [...job.problems] } : {}) } : null);
 
   function addLog(job, line) {
-    const s = String(line);
+    const s = redactPaths(line);
     job.log.push(s.length > LOG_CHARS ? s.slice(0, LOG_CHARS) : s);
     if (job.log.length > LOG_LINES) job.log.splice(0, job.log.length - LOG_LINES);
   }
@@ -97,13 +109,14 @@ export function createDigestJobs({ cfg, deps = {} }) {
     let workdir = null;
     // The terminal state is published only in `finally`, together with finishedAt, after cleanup.
     let outcome = null;
-    const fail = (message) => { outcome = { state: 'failed', message }; };
+    const fail = (message) => { outcome = { state: 'failed', message: redactPaths(message) }; };
     try {
       if (needsExtract) {
         addLog(job, 'PDF에서 본문을 추출하는 중');
         try {
           await extract(job.paperId);
         } catch (err) {
+          if (ctx.cancelled) return;
           return fail(firstLine(err) || '추출에 실패했습니다.');
         }
         if (ctx.cancelled) return;
@@ -173,7 +186,9 @@ export function createDigestJobs({ cfg, deps = {} }) {
       }
       fail(`${MAX_ATTEMPTS}번 시도했지만 검증을 통과하지 못했습니다. 기존 요약은 그대로입니다.`);
     } catch (err) {
-      fail(`요약을 만들지 못했습니다: ${firstLine(err)}`);
+      // Raw fs errors carry absolute paths: log them on the server only.
+      console.error('[digest-job]', err);
+      fail(`${UNEXPECTED_MESSAGE}${/^E[A-Z]+$/.test(err?.code ?? '') ? ` (${err.code})` : ''}`);
     } finally {
       if (!outcome) outcome = ctx.cancelled ? { state: 'cancelled', message: '요약 만들기를 취소했습니다.' } : { state: 'failed', message: '요약을 만들지 못했습니다.' };
       if (workdir) await cleanupWorkdir(workdir).catch(() => {});

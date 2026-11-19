@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { createDigestJobs } from '../src/agent/digest-job.mjs';
+import { createDigestJobs, redactPaths } from '../src/agent/digest-job.mjs';
 
 const SOURCE = {
   id: 'p1',
@@ -280,4 +280,71 @@ test('log keeps the last 20 lines, each at most 200 chars; job snapshot is a cop
   j.log.push('y');
   assert.equal(c.jobs.get('p1').state, 'done');
   assert.equal(c.jobs.get('p1').log.length, 20);
+});
+
+test('redactPaths replaces absolute and ~ paths with their basename, keeps other text', () => {
+  assert.equal(redactPaths("EACCES: permission denied, open '/Users/me/out/p1/.digest.json.1.tmp'"), "EACCES: permission denied, open '.digest.json.1.tmp'");
+  assert.equal(redactPaths('File "/Users/me/paper reader/extract/run.py", line 3'), 'File "run.py", line 3');
+  assert.equal(redactPaths('읽을 수 없음: /Users/me/papers/a.pdf (손상)'), '읽을 수 없음: a.pdf (손상)');
+  assert.equal(redactPaths('cwd=/private/var/folders/x/paper-reader-digest-abc/'), 'cwd=paper-reader-digest-abc');
+  assert.equal(redactPaths('see ~/papers/2501.06706v1.pdf now'), 'see 2501.06706v1.pdf now');
+  assert.equal(redactPaths('C:\\Users\\me\\a.pdf'), 'a.pdf');
+  assert.equal(redactPaths('http://127.0.0.1:5173/api/papers 와 A/B 시험, 1/2, /tmp'), 'http://127.0.0.1:5173/api/papers 와 A/B 시험, 1/2, /tmp');
+  assert.equal(redactPaths(undefined), '');
+});
+
+test('unexpected error (digest save fails): fixed message without paths, raw error only on console', async (t) => {
+  const runs = [];
+  const c = await setup(t, { runs });
+  runs.push(async (w) => {
+    await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(GOOD));
+    await fs.chmod(path.join(c.out, 'p1'), 0o500); // tmp write into the paper dir fails
+    return { code: 0 };
+  });
+  t.after(() => fs.chmod(path.join(c.out, 'p1'), 0o700).catch(() => {}));
+  const logged = [];
+  t.mock.method(console, 'error', (...a) => { logged.push(a.map(String).join(' ')); });
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  const job = c.jobs.get('p1');
+  assert.equal(job.state, 'failed');
+  assert.equal(job.message, '요약을 만들지 못했습니다. 기존 요약은 그대로입니다. 서버 로그를 확인하세요. (EACCES)');
+  assert.ok(!JSON.stringify(job).includes(c.tmp));
+  assert.ok(logged.some((l) => l.includes(c.tmp)));
+  await fs.chmod(path.join(c.out, 'p1'), 0o700);
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(c.out, 'p1', 'digest.json'), 'utf8')), OLD);
+});
+
+test('paths in extraction errors, tool logs and error hints are redacted', async (t) => {
+  const extract = async () => { throw new Error(`PDF를 열 수 없습니다: /Users/someone/papers/secret dir/x.pdf\ntrace`); };
+  const c = await setup(t, { runs: [], pdfIds: ['f1'], extract });
+  await c.jobs.start('f1');
+  await settled(c.jobs, 'f1');
+  // Unquoted paths with spaces: everything up to the space collapses to its last segment (no home dir left).
+  assert.equal(c.jobs.get('f1').message, 'PDF를 열 수 없습니다: secret dir/x.pdf');
+
+  const runs = [];
+  const d = await setup(t, { runs });
+  runs.push(async (w, call) => {
+    call.onLog(`오류: cannot write ${w}/digest.json`);
+    return { code: 1, errorHint: `실패: '${w}/x'` };
+  });
+  await d.jobs.start('p1');
+  await settled(d.jobs, 'p1');
+  const j = d.jobs.get('p1');
+  assert.ok(!JSON.stringify(j).includes(d.workdirs[0]), JSON.stringify(j));
+  assert.ok(j.log.includes('오류: cannot write digest.json'));
+  assert.equal(j.message, "실패: 'x'");
+});
+
+test('cancel during an extraction that then fails ends cancelled, not failed', async (t) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const extract = async () => { await gate; throw new Error('추출 실패'); };
+  const c = await setup(t, { runs: [], pdfIds: ['f1'], extract });
+  await c.jobs.start('f1');
+  assert.equal(c.jobs.cancel('f1'), true);
+  release();
+  await settled(c.jobs, 'f1');
+  assert.equal(c.jobs.get('f1').state, 'cancelled');
 });
