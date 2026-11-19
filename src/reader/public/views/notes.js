@@ -271,7 +271,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     renderMarks();
   }
 
-  const sentEl = (sid) => panel.querySelector(`[data-sid="${CSS.escape(sid)}"]`);
+  const sentEl = (sid) => panel.querySelector(`.sent[data-sid="${CSS.escape(sid)}"]`);
 
   async function openPopover(sid, anchor, focusText = false) {
     if (s.disposed) return;

@@ -197,7 +197,7 @@ export function createPdfView({ paperId, source, container, onError }) {
       for (const { page, rect } of sentRects(sid)) {
         if (!pageOf(page)) continue;
         const d = box(pageOf(page), rect, `pdf-mark${m?.color ? ' pdf-mark-mine' : ''}${m?.zotero ? ' pdf-mark-zot' : ''}`);
-        d.dataset.sid = sid;
+        d.dataset.markSid = sid; // not data-sid: notes.js looks up .sent[data-sid] in the same panel
         if (m?.color) d.style.setProperty('--mark', m.color);
         add(page, d);
       }
