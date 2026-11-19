@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
 import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
 import { nextZoom, pagesToDraw, pdfErrorMessage } from '../src/reader/public/views/pdf-view.js';
-import { progressPercent } from '../src/reader/public/views/list.js';
+import { progressPercent, tileState, folderPreview } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
   const all = metricBadges({ scopus: null, sjrQuartile: null, sjrYear: null, wos: null, scie: null, ssci: null });
@@ -66,6 +66,22 @@ test('cardEvidence: 모드에 보이는 항목의 evidence만 모은다', () => 
 test('progressPercent', () => {
   assert.equal(progressPercent({ cardsRead: 1, cardsTotal: 4 }), 25);
   assert.equal(progressPercent({ cardsRead: 0, cardsTotal: 0 }), 0);
+});
+
+test('tileState: digest / extracted / pdf, linked adds Zotero tag', () => {
+  assert.deepEqual(tileState({ state: 'digest', linked: false }), { tag: '요약 있음', tagClass: 'tag-ok', action: 'open', zotero: false });
+  assert.deepEqual(tileState({ state: 'extracted', linked: true }), { tag: '요약 대기', tagClass: 'tag-wait', action: 'open', zotero: true });
+  assert.deepEqual(tileState({ state: 'pdf', linked: false }), { tag: 'PDF만 있음', tagClass: 'tag-pdf', action: 'extract', zotero: false });
+  // Unknown/missing state never offers extract.
+  assert.equal(tileState({}).action, 'open');
+  assert.equal(tileState({ state: 'weird' }).action, 'open');
+});
+
+test('folderPreview: first 50 unless expanded', () => {
+  const many = Array.from({ length: 120 }, (_, i) => i);
+  assert.deepEqual(folderPreview(many, false), { shown: many.slice(0, 50), hidden: 70 });
+  assert.deepEqual(folderPreview(many, true), { shown: many, hidden: 0 });
+  assert.deepEqual(folderPreview([1, 2], false), { shown: [1, 2], hidden: 0 });
 });
 
 test('citationTrend: last 3 years ending at the latest year, missing years as 0', () => {

@@ -30,6 +30,10 @@ const sendJson = (method, body) => ({
 
 const actions = {
   toast,
+  // Folder settings / extract: throw Error(server message); the list view shows it in the toast.
+  saveFolders: (folders) => api('/api/library/folders', sendJson('PUT', { folders })),
+  extractPaper: (id) => api('/api/library/extract', sendJson('POST', { id })),
+  refreshList: () => route(),
   async saveProgress(id, progress) {
     try {
       await api(`/api/papers/${encodeURIComponent(id)}/progress`, sendJson('PUT', progress));
@@ -98,10 +102,10 @@ async function route() {
       document.title = `검색 ${name} · Paper Reader`;
       searchView.render(app, { name, search }, actions);
     } else {
-      const [{ papers }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
+      const [{ papers, folders }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
       if (seq !== routeSeq) return;
       document.title = 'Paper Reader';
-      listView.render(app, { papers, searches }, actions);
+      listView.render(app, { papers, folders, searches }, actions);
     }
     window.scrollTo(0, 0);
     app.querySelector('h1')?.focus({ preventScroll: true });
