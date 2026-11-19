@@ -73,3 +73,21 @@ test('settings: lastModels recorded per key and kept across other writes', async
     assert.deepEqual((await readSettings(d)).lastModels, { claude: { model: 'm', at: 't' } });
   } finally { await fs.rm(d, { recursive: true, force: true }); }
 });
+
+test('settings: concurrent writes are serialized (no lost update)', async () => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-q-'));
+  try {
+    await Promise.all([
+      recordLastModel(d, 'codex', 'm1', 't1'),
+      writeSettings(d, { agent: 'gemini' }),
+      recordLastModel(d, 'gemini', 'm2', 't2'),
+      writeSettings(d, { agentProfile: { claude: 'claude-yvin' } }),
+      writeSettings(d, { agent: 'nope' }).catch(() => 'rejected'),
+      recordLastModel(d, 'claude:claude', 'm3', 't3'),
+    ]);
+    const s = await readSettings(d);
+    assert.equal(s.agent, 'gemini');
+    assert.deepEqual(s.agentProfile, { claude: 'claude-yvin' });
+    assert.deepEqual(Object.keys(s.lastModels).sort(), ['claude:claude', 'codex', 'gemini']);
+  } finally { await fs.rm(d, { recursive: true, force: true }); }
+});

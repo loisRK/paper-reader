@@ -52,6 +52,18 @@ export async function readSettings(dataDir) {
   }
 }
 
+// Every read-modify-write of settings.json goes through one queue per file, so concurrent updates
+// (folder/tool choice vs. recording a run's model) never overwrite each other.
+const queues = new Map();
+function serialized(dataDir, fn) {
+  const key = path.resolve(settingsFile(dataDir));
+  const run = (queues.get(key) ?? Promise.resolve()).then(fn, fn);
+  const tail = run.catch(() => {});
+  queues.set(key, tail);
+  tail.then(() => { if (queues.get(key) === tail) queues.delete(key); });
+  return run;
+}
+
 async function writeAtomic(dataDir, next) {
   const file = settingsFile(dataDir);
   await fs.mkdir(dataDir, { recursive: true });
@@ -60,7 +72,11 @@ async function writeAtomic(dataDir, next) {
   await fs.rename(tmp, file);
 }
 
-export async function recordLastModel(dataDir, key, model, at = new Date().toISOString()) {
+export function recordLastModel(dataDir, key, model, at = new Date().toISOString()) {
+  return serialized(dataDir, () => recordLastModelNow(dataDir, key, model, at));
+}
+
+async function recordLastModelNow(dataDir, key, model, at) {
   const saved = await readSettings(dataDir);
   saved.lastModels = { ...(saved.lastModels ?? {}), [key]: { model: String(model).slice(0, 100), at } };
   await writeAtomic(dataDir, saved);
@@ -92,7 +108,11 @@ export async function validateFolders(folders, saved = []) {
 }
 
 // Fields left undefined keep their saved value, so saving folders never drops `agent` and vice versa.
-export async function writeSettings(dataDir, { folders, agent, agentProfile } = {}) {
+export function writeSettings(dataDir, changes = {}) {
+  return serialized(dataDir, () => writeSettingsNow(dataDir, changes));
+}
+
+async function writeSettingsNow(dataDir, { folders, agent, agentProfile } = {}) {
   const saved = await readSettings(dataDir);
   const next = { folders: folders === undefined ? saved.folders : await validateFolders(folders, saved.folders) };
   if (agent !== undefined) {

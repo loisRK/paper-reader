@@ -154,7 +154,16 @@ test('gemini command: headless, auto_edit, our policy file, no extensions/MCP, w
 
 test('gemini policy: shell/web denied, reads only workdir files, writes only digest.json', () => {
   const rules = geminiPolicyRules('/tmp/paper-reader-digest-abc');
-  for (const r of rules) assert.ok(r.priority >= 950 && r.priority <= 999, 'above every settings-derived user-tier rule (<= 4.9)');
+  for (const r of rules) {
+    assert.ok(r.priority >= 960 && r.priority <= 999, 'above every settings-derived user-tier rule (<= 4.9)');
+    assert.notEqual(r.priority, 950, '.950 is Gemini\'s always-allow marker');
+  }
+  // Gemini's loader drops a pattern with a group followed by a quantifier (its ReDoS heuristic) or > 2048 chars.
+  const long = geminiPolicyRules(`/var/folders/yd/${'x'.repeat(28)}/T/paper-reader-digest-AbCdEf`);
+  for (const r of [...rules, ...long].filter((x) => x.argsPattern)) {
+    assert.doesNotMatch(r.argsPattern, /\([^)]*[*+?{].*\)[*+?{]/, r.argsPattern);
+    assert.ok(r.argsPattern.length <= 2048);
+  }
   for (const t of ['run_shell_command', 'web_fetch', 'google_web_search']) {
     assert.equal(decide(rules, t, { command: 'ls', url: 'http://x' }), 'deny', t);
   }
@@ -195,4 +204,43 @@ test('settings: agentProfile kept across writes; bad labels rejected', async () 
     await assert.rejects(writeSettings(d, { agentProfile: { claude: '../x' } }), { status: 400 });
     await assert.rejects(writeSettings(d, { agentProfile: { codex: 'a' } }), { status: 400 });
   } finally { await fs.rm(d, { recursive: true, force: true }); }
+});
+
+// The generated policy, loaded by the REAL installed Gemini CLI policy loader and engine (no prompt is run).
+import { execFileSync } from 'node:child_process';
+import fsSync from 'node:fs';
+import { fileURLToPath } from 'node:url';
+
+function geminiBundleDir() {
+  for (const d of (process.env.PATH ?? '').split(path.delimiter)) {
+    const bin = path.join(d, 'gemini');
+    try {
+      const real = fsSync.realpathSync(bin);
+      if (real.endsWith(path.join('bundle', 'gemini.js'))) return path.dirname(real);
+    } catch { /* not here */ }
+  }
+  return null;
+}
+
+test('gemini policy through the real installed loader: no rule dropped, reads/writes allowed only in the workdir', (t) => {
+  const bundle = geminiBundleDir();
+  if (!bundle) { t.skip('Gemini CLI가 설치되어 있지 않아 실제 정책 로더 시험을 건너뜁니다.'); return; }
+  const wd = fsSync.mkdtempSync(path.join(os.tmpdir(), 'paper-reader-digest-'));
+  const home = fsSync.mkdtempSync(path.join(os.tmpdir(), 'pr-gemini-home-'));
+  try {
+    const probe = fileURLToPath(new URL('./fixtures/gemini-policy-probe.mjs', import.meta.url));
+    const commands = fileURLToPath(new URL('../src/agent/commands.mjs', import.meta.url));
+    const raw = execFileSync(process.execPath, [probe, bundle, commands, wd], { env: { ...process.env, HOME: home }, timeout: 60_000, encoding: 'utf8' });
+    const r = JSON.parse(raw.trim().split('\n').pop());
+    assert.equal(r.error, undefined, r.error);
+    assert.deepEqual(r.feedback, [], 'the loader reported a policy problem (dropped rule?)');
+    assert.equal(r.ours, 8, 'all 5 rules (8 tool entries) loaded');
+    const allow = Object.keys(r.decisions).filter((k) => /^(read|list \.|write (abs |tmpdir )?digest|replace)/.test(k) && !/\.\.\/|ssh/.test(k));
+    for (const [k, v] of Object.entries(r.decisions)) assert.equal(v, allow.includes(k) ? 'allow' : 'deny', k);
+    assert.ok(allow.length >= 15);
+    assert.deepEqual(r.strictDecisions, { unknown: 'deny', glob: 'deny', 'write outside': 'deny', 'read paper.txt': 'allow', 'write digest.json': 'allow' });
+  } finally {
+    fsSync.rmSync(wd, { recursive: true, force: true });
+    fsSync.rmSync(home, { recursive: true, force: true });
+  }
 });

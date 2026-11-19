@@ -11,7 +11,7 @@ const CLAUDE_SETTINGS = {
 // ---- Gemini CLI ----
 // Policy Engine (docs/reference/policy-engine.md): a --policy file loads in the User tier (base 4), so a rule's
 // final priority is 4 + priority/1000. Settings-derived rules (tools.allowed, tools.exclude, MCP) top out at 4.9;
-// every rule here is >= 950 (4.95), so the user's own settings cannot loosen it. Highest priority wins.
+// every rule here is >= 960 (4.96), so the user's own settings cannot loosen it. Highest priority wins.
 // Tool args are matched as Gemini's stable JSON: sorted top-level keys, each `"key":value` pair wrapped in \0,
 // so text inside `content` can never fake a top-level `"file_path"`.
 const GEMINI_POLICY_FILE = '.gemini-policy.toml';
@@ -26,7 +26,7 @@ const GEMINI_SETTINGS = {
 const READABLE = ['paper.txt', 'figures.txt', 'digest.md', 'TASK.md', 'digest.json'];
 const reEscape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 
-function workdirAlternatives(workdir) {
+function workdirs(workdir) {
   if (!/^[A-Za-z0-9/._-]+$/.test(workdir)) throw new Error('작업 폴더 경로에 쓸 수 없는 문자가 있습니다.');
   const dirs = new Set([workdir]);
   try { dirs.add(fs.realpathSync(workdir)); } catch { /* not created (tests) */ }
@@ -34,17 +34,29 @@ function workdirAlternatives(workdir) {
     if (/^\/(var|tmp)\//.test(d)) dirs.add(`/private${d}`);
     if (d.startsWith('/private/')) dirs.add(d.slice('/private'.length));
   }
-  return `(?:${[...dirs].map(reEscape).join('|')})`;
+  return [...dirs];
 }
 
+// Gemini's loader drops any argsPattern its ReDoS heuristic flags (a group followed by a quantifier, e.g.
+// `(?:a|b)?`), and `(?:` itself counts as "a quantifier inside a group". So each pattern is one flat group of
+// exact alternatives with no quantifier anywhere: every allowed spelling of every allowed path is listed.
+function exactPathPattern(key, names, dirs) {
+  const alts = [];
+  for (const n of names) alts.push(n, `./${n}`, ...dirs.map((d) => `${d}/${n}`));
+  return `\\x00"${key}":"(?:${alts.map(reEscape).join('|')})"\\x00`;
+}
+
+// Priorities: user-tier fraction .950 is Gemini's "always allow" marker (skipped under disableAlwaysAllow /
+// secure mode), so the deny-all uses 960. Order: deny-all 960 < allows 990 < shell/web deny 999.
 export function geminiPolicyRules(workdir) {
-  const wd = workdirAlternatives(workdir);
-  const pair = (key, value) => `\\x00"${key}":"${value}"\\x00`;
+  const dirs = workdirs(workdir);
+  const listable = [];
+  for (const d of dirs) listable.push(d, `${d}/`);
   return [
-    { toolName: '*', decision: 'deny', priority: 950, denyMessage: '이 작업에서는 작업 폴더의 파일 읽기와 digest.json 쓰기만 할 수 있습니다.' },
-    { toolName: 'read_file', argsPattern: pair('file_path', `(?:\\./|${wd}/)?(?:${READABLE.map(reEscape).join('|')})`), decision: 'allow', priority: 990 },
-    { toolName: 'list_directory', argsPattern: pair('dir_path', `(?:\\.|\\./|${wd}|${wd}/)`), decision: 'allow', priority: 990 },
-    { toolName: ['write_file', 'replace'], argsPattern: pair('file_path', `(?:\\./|${wd}/)?digest\\.json`), decision: 'allow', priority: 990 },
+    { toolName: '*', decision: 'deny', priority: 960, denyMessage: '이 작업에서는 작업 폴더의 파일 읽기와 digest.json 쓰기만 할 수 있습니다.' },
+    { toolName: 'read_file', argsPattern: exactPathPattern('file_path', READABLE, dirs), decision: 'allow', priority: 990 },
+    { toolName: 'list_directory', argsPattern: `\\x00"dir_path":"(?:${['.', './', ...listable].map(reEscape).join('|')})"\\x00`, decision: 'allow', priority: 990 },
+    { toolName: ['write_file', 'replace'], argsPattern: exactPathPattern('file_path', ['digest.json'], dirs), decision: 'allow', priority: 990 },
     { toolName: ['run_shell_command', 'web_fetch', 'google_web_search'], decision: 'deny', priority: 999 },
   ];
 }
