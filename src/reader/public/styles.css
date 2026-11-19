@@ -197,6 +197,20 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .section-tag { font-size: .78rem; color: var(--muted); text-transform: none; letter-spacing: .02em; }
 .question { font-size: 1.2rem; margin: .7rem 0 .35rem; }
 .answer { font-size: 1.06rem; margin: 0 0 .7rem; line-height: 1.7; }
+.explain {
+  margin: 0 0 .8rem; padding: .7rem .9rem; border-left: 3px solid var(--accent);
+  background: var(--surface-2); border-radius: 0 8px 8px 0; line-height: 1.75; font-size: .97rem;
+}
+.item-label { margin-right: .35rem; }
+.dtable { margin: .6rem 0 .9rem; }
+.dtable-scroll { overflow-x: auto; -webkit-overflow-scrolling: touch; }
+.dtable table { border-collapse: collapse; width: 100%; font-size: .9rem; font-variant-numeric: tabular-nums; }
+.dtable caption { caption-side: top; text-align: left; font-weight: 600; padding-bottom: .35rem; }
+.dtable th, .dtable td { padding: .4rem .55rem; border-bottom: 1px solid var(--line); text-align: right; white-space: nowrap; }
+.dtable th:first-child, .dtable thead th:first-child { text-align: left; }
+.dtable thead th { color: var(--muted); font-weight: 600; text-align: right; }
+.dtable tbody th { font-weight: 600; }
+.dtable-note { font-size: .85rem; color: var(--muted); margin-top: .35rem; }
 .items { list-style: none; padding: 0; margin: .4rem 0 .8rem; display: grid; gap: .45rem; }
 .item { position: relative; padding-left: 1.1rem; line-height: 1.65; }
 .item::before { content: ""; position: absolute; left: .2rem; top: .7em; width: .4rem; height: .4rem; border-radius: 50%; background: var(--accent); }

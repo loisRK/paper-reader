@@ -60,9 +60,9 @@ export function validateDigest(digest, source) {
           problems.push(`${id}: 근거 없는 claim 제거 – ${head(it.text)}`);
           continue;
         }
-        items.push({ kind: 'claim', text: str(it.text), evidence: ev });
+        items.push({ kind: 'claim', label: str(it.label), text: str(it.text), evidence: ev });
       } else if (it.kind === 'opinion') {
-        items.push({ kind: 'opinion', text: str(it.text), evidence: ev.filter(known) });
+        items.push({ kind: 'opinion', label: str(it.label), text: str(it.text), evidence: ev.filter(known) });
       } else {
         problems.push(`${id}: 알 수 없는 kind "${String(it.kind)}" 항목 제거 – ${head(it.text)}`);
       }
@@ -89,7 +89,30 @@ export function validateDigest(digest, source) {
       figures.push({ label: str(f.label), page: f.page, note: str(f.note) });
     }
 
-    cards.push({ id, section, question: str(c.question), answer: str(c.answer), bridge: str(c.bridge), items, bigNumbers, figures });
+    // Tables reproduce numbers from the paper, so like bigNumbers they need evidence.
+    const tables = [];
+    for (const t of Array.isArray(c.tables) ? c.tables : []) {
+      if (!isObj(t)) continue;
+      const columns = Array.isArray(t.columns) ? t.columns : [];
+      const rows = Array.isArray(t.rows) ? t.rows : [];
+      const shapeOk = columns.length > 0 && columns.every((x) => typeof x === 'string')
+        && rows.every((r) => Array.isArray(r) && r.length === columns.length && r.every((x) => typeof x === 'string'));
+      if (!shapeOk) {
+        problems.push(`${id}: 형식이 맞지 않는 표 제거 – ${head(t.title)}`);
+        continue;
+      }
+      const ev = strList(t.evidence);
+      if (!allKnown(ev)) {
+        problems.push(`${id}: 근거 없는 표 제거 – ${head(t.title)}`);
+        continue;
+      }
+      tables.push({ title: str(t.title), columns: [...columns], rows: rows.map((r) => [...r]), evidence: ev, note: str(t.note) });
+    }
+
+    cards.push({
+      id, section, question: str(c.question), answer: str(c.answer), explain: str(c.explain), bridge: str(c.bridge),
+      items, bigNumbers, tables, figures,
+    });
   });
 
   const glossary = (Array.isArray(digest.glossary) ? digest.glossary : [])

@@ -173,3 +173,43 @@ test('duplicate card ids are reported and renamed uniquely', () => {
   assert.deepEqual(digest.cards.map((c) => c.id), ['c1', 'c1-3', 'c1-2', 'c1-4']);
   assert.deepEqual(problems, ['c1: 카드 id 중복', 'c1: 카드 id 중복']);
 });
+
+test('explain and item label are kept as strings', () => {
+  const { digest, problems } = validateDigest(d({
+    explain: '해설 문단',
+    items: [{ kind: 'claim', label: '소제목', text: 'X', evidence: ['p1-s1'] }, { kind: 'opinion', text: 'Y', evidence: [] }],
+  }), source);
+  assert.deepEqual(problems, []);
+  assert.equal(digest.cards[0].explain, '해설 문단');
+  assert.equal(digest.cards[0].items[0].label, '소제목');
+  assert.equal(digest.cards[0].items[1].label, '');
+});
+
+test('missing explain/tables default to empty', () => {
+  const { digest } = validateDigest(d({}), source);
+  assert.equal(digest.cards[0].explain, '');
+  assert.deepEqual(digest.cards[0].tables, []);
+});
+
+test('table with known evidence and consistent shape is kept', () => {
+  const t = { title: 'Table 3 재구성', columns: ['Agent', 'Acc.'], rows: [['A', '1%'], ['B', '2%']], evidence: ['p2-s1'], note: 'n' };
+  const { digest, problems } = validateDigest(d({ tables: [t] }), source);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(digest.cards[0].tables, [t]);
+});
+
+test('table without valid evidence is removed and reported', () => {
+  const t = { title: 'T', columns: ['a'], rows: [['1']], evidence: ['p9-s9'] };
+  const { digest, problems } = validateDigest(d({ tables: [t] }), source);
+  assert.deepEqual(digest.cards[0].tables, []);
+  assert.match(problems[0], /c1: 근거 없는 표 제거 – T/);
+});
+
+test('table with mismatched row length or no columns is removed and reported', () => {
+  const bad1 = { title: 'R', columns: ['a', 'b'], rows: [['1']], evidence: ['p1-s1'] };
+  const bad2 = { title: 'C', columns: [], rows: [], evidence: ['p1-s1'] };
+  const { digest, problems } = validateDigest(d({ tables: [bad1, bad2] }), source);
+  assert.deepEqual(digest.cards[0].tables, []);
+  assert.match(problems[0], /c1: 형식이 맞지 않는 표 제거 – R/);
+  assert.match(problems[1], /c1: 형식이 맞지 않는 표 제거 – C/);
+});

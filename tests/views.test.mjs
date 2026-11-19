@@ -75,3 +75,9 @@ test('citationTrend: last 3 years ending at the latest year, missing years as 0'
   assert.equal(citationTrend(undefined), null);
   assert.equal(citationTrend([{ year: 'x', count: 1 }]), null);
 });
+
+test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () => {
+  const card = { items: [{ kind: 'claim', text: 'a', evidence: ['p1-s1'] }], tables: [{ evidence: ['p8-s6', 'p1-s1'] }] };
+  assert.deepEqual(cardEvidence(card, '10min'), ['p1-s1', 'p8-s6']);
+  assert.deepEqual(cardEvidence(card, '3min'), []);
+});

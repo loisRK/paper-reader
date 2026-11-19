@@ -23,6 +23,7 @@ export function cardEvidence(card, mode) {
   const ids = [];
   for (const it of visibleItems(card, mode)) ids.push(...(it.evidence ?? []));
   for (const b of card?.bigNumbers ?? []) ids.push(...(b.evidence ?? []));
+  for (const t of card?.tables ?? []) ids.push(...(t.evidence ?? []));
   return [...new Set(ids)];
 }
 
@@ -82,6 +83,19 @@ function figureLine(f, links) {
       ? el('a', { href: `${links.zoteroPdf}?page=${f.page}`, text: `Zotero에서 ${pageText} 열기` })
       : el('span', { class: 'muted', text: pageText }),
     f.note ? el('span', { class: 'figure-note', text: ` — ${f.note}` }) : null,
+  );
+}
+
+function tableNode(t, onEvidence, cardId) {
+  return el('figure', { class: 'dtable' },
+    el('div', { class: 'dtable-scroll' },
+      el('table', {},
+        t.title ? el('caption', {}, t.title, evidenceButton(t.evidence, onEvidence, cardId)) : null,
+        el('thead', {}, el('tr', {}, t.columns.map((c) => el('th', { scope: 'col', text: c })))),
+        el('tbody', {}, t.rows.map((r) => el('tr', {}, r.map((v, i) => (i === 0 ? el('th', { scope: 'row', text: v }) : el('td', { text: v })))))),
+      ),
+    ),
+    t.note ? el('figcaption', { class: 'dtable-note', text: t.note }) : null,
   );
 }
 
@@ -252,8 +266,10 @@ export function render(container, data, actions) {
     ),
     el('h2', { class: 'question', id: `q-${card.id}` }, richText(card.question, glossary, seen)),
     el('p', { class: 'answer' }, richText(card.answer, glossary, seen)),
+    full && card.explain ? el('p', { class: 'explain' }, richText(card.explain, glossary, seen)) : null,
     items.length ? el('ul', { class: 'items' }, items.map((it) => el('li', { class: `item item-${it.kind}` },
       it.kind === 'opinion' ? el('span', { class: 'opinion-badge', text: '💬 해석' }) : null,
+      it.label ? el('strong', { class: 'item-label', text: it.label }) : null,
       el('span', { class: 'item-text' }, richText(it.text, glossary, seen)),
       evidenceButton(it.evidence, showEvidence, card.id),
     ))) : null,
@@ -262,6 +278,7 @@ export function render(container, data, actions) {
       el('span', { class: 'bignum-label' }, richText(b.label, glossary, seen)),
       evidenceButton(b.evidence, showEvidence, card.id),
     ))) : null,
+    full && card.tables?.length ? card.tables.map((t) => tableNode(t, showEvidence, card.id)) : null,
     full && card.figures?.length ? el('ul', { class: 'figures', 'aria-label': '그림' }, card.figures.map((f) => figureLine(f, links))) : null,
     el('label', { class: 'read-check' }, check, ' 읽음'),
     );
