@@ -94,15 +94,6 @@ export function createDigestJobs({ cfg, deps = {} }) {
     }
   }
 
-  async function researchContextPath() {
-    const f = cfg.researchContextFile;
-    if (!f) return undefined;
-    try {
-      if ((await fs.stat(f)).isFile()) return f;
-    } catch { /* missing */ }
-    return null;
-  }
-
   async function run(ctx, needsExtract) {
     const { job } = ctx;
     let paperDir = path.join(out, job.paperId);
@@ -132,8 +123,6 @@ export function createDigestJobs({ cfg, deps = {} }) {
       const sourceFile = path.join(paperDir, 'source.json');
       const source = await readJsonFile(sourceFile);
       if (!source) return fail('source.json을 읽을 수 없습니다.');
-      const researchContext = await researchContextPath();
-      if (researchContext === null) addLog(job, '연구 맥락 파일을 찾을 수 없어 빼고 진행합니다.');
 
       let problems = [];
       for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
@@ -147,7 +136,6 @@ export function createDigestJobs({ cfg, deps = {} }) {
           workdir = await prepareWorkdir({
             source: sourceFile,
             digestRules: rulesFile,
-            ...(researchContext ? { researchContext } : {}),
             ...(prevDigest && (await fs.access(prevDigest).then(() => true, () => false)) ? { previousDigest: prevDigest } : {}),
           });
         } catch (err) {

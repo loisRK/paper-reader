@@ -332,8 +332,6 @@ a.row-title:hover { color: var(--accent); text-decoration: underline; }
 .items { list-style: none; padding: 0; margin: .4rem 0 .8rem; display: grid; gap: .45rem; }
 .item { position: relative; padding-left: 1.1rem; line-height: 1.65; }
 .item::before { content: ""; position: absolute; left: .2rem; top: .7em; width: .4rem; height: .4rem; border-radius: 50%; background: var(--accent); }
-.item-opinion::before { background: var(--muted); }
-.opinion-badge { font-size: .75rem; background: var(--surface-2); color: var(--muted); padding: .05rem .45rem; border-radius: 999px; margin-right: .4rem; white-space: nowrap; }
 .ev-btn {
   font: inherit; font-size: .85rem; line-height: 1; margin-left: .3rem; padding: .25rem .4rem;
   border: 1px solid var(--line); border-radius: 6px; background: var(--surface-2); cursor: pointer; vertical-align: baseline;

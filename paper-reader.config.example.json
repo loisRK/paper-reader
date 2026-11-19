@@ -12,6 +12,5 @@
     "contactEmail": null,
     "excludedIssns": ["0302-9743", "1611-3349", "1613-0073", "1877-0509", "1865-0929"]
   },
-  "metrics": { "sjrCsv": "./data/scimagojr.csv", "mjlCsv": null },
-  "researchContextFile": null
+  "metrics": { "sjrCsv": "./data/scimagojr.csv", "mjlCsv": null }
 }

@@ -15,7 +15,8 @@ const TAB_KEY = 'paper-reader:source-tab';
 
 export function visibleItems(card, mode) {
   if (mode === '3min') return [];
-  return Array.isArray(card?.items) ? card.items : [];
+  // Only the paper's own claims are shown; an old digest's opinion items never render.
+  return Array.isArray(card?.items) ? card.items.filter((it) => it?.kind === 'claim') : [];
 }
 
 // Source panel tab on open: text when there is no PDF or the reader last chose text, else PDF.
@@ -573,7 +574,6 @@ export function render(container, data, actions) {
     el('p', { class: 'answer' }, richText(card.answer, glossary, seen)),
     full && card.explain ? el('p', { class: 'explain' }, richText(card.explain, glossary, seen)) : null,
     items.length ? el('ul', { class: 'items' }, items.map((it) => el('li', { class: `item item-${it.kind}` },
-      it.kind === 'opinion' ? el('span', { class: 'opinion-badge', text: '💬 해석' }) : null,
       it.label ? el('strong', { class: 'item-label', text: it.label }) : null,
       el('span', { class: 'item-text' }, richText(it.text, glossary, seen)),
       evidenceButton(it.evidence, showEvidence, card.id),

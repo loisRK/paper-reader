@@ -18,8 +18,10 @@ export const DEFAULTS = {
     excludedIssns: ['0302-9743', '1611-3349', '1613-0073', '1877-0509', '1865-0929'],
   },
   metrics: { sjrCsv: './data/scimagojr.csv', mjlCsv: null },
-  researchContextFile: null,
 };
+
+// Settings that no longer exist; a value left in a user's config is dropped silently.
+const REMOVED_KEYS = ['researchContextFile'];
 
 const isPlainObject = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 
@@ -62,6 +64,6 @@ export async function loadConfig(configPath = './paper-reader.config.json') {
   config.metrics.sjrCsv = abs(config.metrics.sjrCsv);
   config.metrics.mjlCsv = abs(config.metrics.mjlCsv);
   config.zotero.authFile = abs(config.zotero.authFile);
-  config.researchContextFile = abs(config.researchContextFile);
+  for (const key of REMOVED_KEYS) delete config[key];
   return config;
 }

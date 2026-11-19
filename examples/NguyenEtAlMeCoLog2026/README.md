@@ -14,5 +14,5 @@
 
 - 원문은 **크리에이티브 커먼즈 저작자표시 4.0 국제 라이선스(CC BY 4.0)** 로 배포됩니다: <https://creativecommons.org/licenses/by/4.0/>
 - 출처: Nguyen MT, Tran TP, Dang LDT, Cao VL (2026) MeCoLog: Meta-contrastive learning for cross-system few-shot log-based anomaly detection. *PLOS One* 21(8): e0356907. https://doi.org/10.1371/journal.pone.0356907 — © 2026 Nguyen et al.
-- 변경 사항: `source.json`은 원문 텍스트를 문장 단위로 나누고 위치 정보를 붙인 것입니다(추출 과정에서 일부 문장이 블록·페이지 경계에서 잘릴 수 있음). `digest.json`은 원문을 바탕으로 한 한국어 요약·해석이며, 저자들의 견해가 아닌 부분은 "💬 해석"(`opinion`)으로 구분되어 있습니다.
+- 변경 사항: `source.json`은 원문 텍스트를 문장 단위로 나누고 위치 정보를 붙인 것입니다(추출 과정에서 일부 문장이 블록·페이지 경계에서 잘릴 수 있음). `digest.json`은 원문 내용만 정리한 한국어 요약이며, 모든 항목에 근거 문장 ID가 붙어 있습니다(모델의 해석·의견은 넣지 않음).
 - 이 예제는 저자나 출판사의 보증을 받은 것이 아닙니다.

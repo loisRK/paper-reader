@@ -6,7 +6,7 @@
 
 - 🔎 **검색**: OpenAlex로 최근 논문을 찾아 세 갈래(🔥 인용 급증 / 🌱 새 주제 / 🏛 저널 흐름)로 골라 줍니다. preprint·학회 논문·리뷰·editorial 등은 제외하고 저널 원저만 남깁니다.
 - 📄 **추출**: Zotero의 PDF를 `p{페이지}-s{번호}` 문장 ID가 붙은 `source.json`으로 바꿉니다.
-- 🤖 **요약**: AI 도구가 `prompts/digest.md` 규칙에 따라 `digest.json`을 씁니다. 원문 사실(`claim`)에는 반드시 근거 문장 ID가 붙고, 해석(`opinion`)은 "💬 해석"으로 구분됩니다.
+- 🤖 **요약**: AI 도구가 `prompts/digest.md` 규칙에 따라 `digest.json`을 씁니다. 요약은 논문 내용만 정리한 카드이며(모델의 해석·의견은 넣지 않음), 모든 항목(`claim`)에 근거 문장 ID가 붙습니다.
 - 📖 **읽기**: 카드 하나씩 읽고, 근거 문장을 바로 확인하고, Zotero PDF의 해당 페이지로 이동합니다. 3분/10분 모드, 집중 모드, 읽은 카드 진행률을 지원합니다.
 
 > 이 도구는 AI API를 직접 호출하지 않습니다. 요약은 여러분이 쓰는 AI 코딩 도구가 작성하고, 이 저장소는 규칙·검증·읽기 화면을 제공합니다.
@@ -52,7 +52,6 @@ cp paper-reader.config.example.json paper-reader.config.json
 | `metrics.sjrCsv` | `./data/scimagojr.csv` | SCImago(SJR) CSV 경로 |
 | `metrics.mjlCsv` | `null` | Clarivate Master Journal List CSV 경로 |
 | `zotero.authFile` | `./data/zotero-auth.json` | Zotero 쓰기 허용 키 저장 위치 (git에 올라가지 않음) |
-| `researchContextFile` | `null` | (선택) 내 연구 주제를 적은 Markdown. 있으면 요약에 "내 연구와의 연결"이 추가됩니다 |
 
 ### OpenAlex API 키 (권장)
 

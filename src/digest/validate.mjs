@@ -1,5 +1,27 @@
 export const SECTIONS = ['motivation', 'gap', 'idea', 'method', 'setup', 'results', 'analysis', 'limits', 'implications'];
 
+// Coverage floor: a digest must carry the whole paper, not just the abstract (prompts/digest.md 4·7절).
+const MIN_CARDS = 12;
+const MIN_CARDS_SHORT = 8;
+const SHORT_PAPER_PAGES = 6;
+const CLAIM_MAX = 100;
+const EXPLAIN_MIN_SENTENCES = 2;
+
+/** Minimum number of cards for this paper: 8 for short papers (≤ 6 pages), else 12. */
+export function minCards(source) {
+  const pages = Array.isArray(source?.pages) ? source.pages.length : 0;
+  return pages > 0 && pages <= SHORT_PAPER_PAGES ? MIN_CARDS_SHORT : MIN_CARDS;
+}
+
+/**
+ * Counts sentences ending in . ! ? 。 (Korean "다." and English "." alike) or a line break.
+ * A period followed by a digit (13.9%) is not a break; fragments without letters/digits are ignored.
+ */
+export function sentenceCount(text) {
+  if (typeof text !== 'string') return 0;
+  return text.split(/(?<=[.!?。])(?!\d)|\n+/u).filter((s) => /[\p{L}\p{N}]/u.test(s)).length;
+}
+
 const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
 const str = (v) => (typeof v === 'string' ? v : '');
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
@@ -61,8 +83,11 @@ export function validateDigest(digest, source) {
           continue;
         }
         items.push({ kind: 'claim', label: str(it.label), text: str(it.text), evidence: ev });
+        const len = [...str(it.text)].length;
+        if (len > CLAIM_MAX) problems.push(`${id}: 문장이 깁니다(${len}자) – 나눠 쓰세요`);
       } else if (it.kind === 'opinion') {
-        items.push({ kind: 'opinion', label: str(it.label), text: str(it.text), evidence: ev.filter(known) });
+        // Cards hold only what the paper says; the model's interpretation is not part of a digest.
+        problems.push(`${id}: 해석·의견 항목은 쓰지 않습니다 – ${head(it.text)}`);
       } else {
         problems.push(`${id}: 알 수 없는 kind "${String(it.kind)}" 항목 제거 – ${head(it.text)}`);
       }
@@ -115,9 +140,29 @@ export function validateDigest(digest, source) {
     });
   });
 
+  problems.push(...coverageProblems(cards, source));
+
   const glossary = (Array.isArray(digest.glossary) ? digest.glossary : [])
     .filter(isObj)
     .map((g) => ({ term: str(g.term), definition: str(g.definition) }));
 
   return { digest: { version: 1, paperId, takeaway, cards, glossary }, problems };
+}
+
+// Whole-paper checks, reported after the per-card problems.
+function coverageProblems(cards, source) {
+  const problems = [];
+  for (const c of cards) {
+    if (sentenceCount(c.explain) < EXPLAIN_MIN_SENTENCES) problems.push(`${c.id}: explain(해설)을 2~4문장으로 쓰세요`);
+  }
+  const min = minCards(source);
+  if (cards.length < min) problems.push(`카드가 ${cards.length}장입니다 – 논문 전체를 담도록 ${min}장 이상 쓰세요`);
+  const present = new Set(cards.map((c) => c.section));
+  const missing = SECTIONS.filter((s) => !present.has(s));
+  if (missing.length) problems.push(`빠진 섹션: ${missing.join(', ')}`);
+  const results = cards.filter((c) => c.section === 'results');
+  if (results.length && !results.some((c) => c.bigNumbers.length || c.tables.length)) {
+    problems.push('결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다');
+  }
+  return problems;
 }

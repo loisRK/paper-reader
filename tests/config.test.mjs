@@ -17,7 +17,7 @@ test('defaults when file missing', async () => {
   assert.equal(c.dataDir, '/nonexistent/data');
   assert.ok(path.isAbsolute(c.metrics.sjrCsv));
   assert.equal(c.metrics.mjlCsv, null);
-  assert.equal(c.researchContextFile, null);
+  assert.equal('researchContextFile' in c, false);
 });
 
 test('merges nested values and resolves relative paths from config dir', async () => {
@@ -38,7 +38,8 @@ test('merges nested values and resolves relative paths from config dir', async (
   assert.equal(c.outputDir, path.join(tmp, 'out'));
   assert.equal(c.metrics.mjlCsv, path.join(dir, 'mjl.csv'));
   assert.equal(c.metrics.sjrCsv, path.join(dir, 'data', 'scimagojr.csv'));
-  assert.equal(c.researchContextFile, path.join(dir, 'ctx.md'));
+  // The removed research-context setting is ignored silently, not an error.
+  assert.equal('researchContextFile' in c, false);
 });
 
 test('invalid JSON throws with file path in message', async () => {

@@ -6,6 +6,7 @@ import path from 'node:path';
 import http from 'node:http';
 import { createServer } from '../src/reader/server.mjs';
 import { folderPaperId } from '../src/library/scan.mjs';
+import { fullDigest } from './fixtures/digest-fixture.mjs';
 
 let dir, server, base;
 const calls = [];
@@ -70,7 +71,11 @@ test('lists papers with read progress', async () => {
 
 test('paper endpoint returns validated digest and problems', async () => {
   const body = await (await fetch(`${base}/api/papers/p1`)).json();
-  assert.equal(body.problems.length, 1);
+  assert.ok(body.problems.includes('c1: 근거 없는 claim 제거 – bad'));
+  // An old digest's opinion is dropped from the cards and shown as a problem in the banner.
+  assert.ok(body.problems.includes('c2: 해석·의견 항목은 쓰지 않습니다 – o'));
+  assert.deepEqual(body.digest.cards[1].items, []);
+  assert.equal(body.digest.cards.length, 2);
   assert.equal(body.links.zoteroPdf, 'zotero://open-pdf/library/items/ATT00001');
   assert.equal(body.links.zoteroItem, 'zotero://select/library/items/ITEM0001');
   assert.equal(body.source.id, 'p1');
@@ -796,7 +801,7 @@ async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf 
     return { done: Promise.race([Promise.resolve().then(() => fn(workdir)), cancelled]), cancel: () => cancel() };
   };
   const detectAgents = async () => agents ?? [{ id: 'codex', name: 'Codex', available: true }, { id: 'claude', name: 'Claude Code', available: false }];
-  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' }, researchContextFile: null },
+  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } },
     { examplesDir: examples, detectAgents, runAgent, extractFile, ...(md5File ? { md5File } : {}) });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
   t.after(async () => { s.close(); await s.digestJobs?.shutdown(); await fs.rm(tmp, { recursive: true, force: true }); });
@@ -813,7 +818,7 @@ async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf 
   };
   return { s, b, out, root, jpost, job, settle, calls };
 }
-const goodDigest = (id) => ({ version: 1, paperId: id, takeaway: { text: 't', evidence: ['p1-s1'], why: 'w' }, cards: [], glossary: [] });
+const goodDigest = (id) => fullDigest({ paperId: id, evidence: 'p1-s1', cards: 12 });
 
 test('digest API: 415 guard, 202 start with selected tool, GET job, done replaces digest', async (t) => {
   const ctx = await digestServer(t, { runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest('d1'))); return { code: 0 }; }] });

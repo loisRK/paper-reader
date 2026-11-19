@@ -29,10 +29,10 @@ test('metricBadges: SSCI만 확인되면 SCIE 미확인 대신 SSCI, 누락 metr
   assert.equal(metricBadges(undefined).length, 4);
 });
 
-test('visibleItems: 3min은 빈 배열, 10min은 전체', () => {
+test('visibleItems: 3min은 빈 배열, 10min은 claim만(예전 opinion은 숨김)', () => {
   const card = { items: [{ kind: 'claim', text: 'a', evidence: ['p1-s1'] }, { kind: 'opinion', text: 'b', evidence: [] }] };
   assert.deepEqual(visibleItems(card, '3min'), []);
-  assert.deepEqual(visibleItems(card, '10min'), card.items);
+  assert.deepEqual(visibleItems(card, '10min'), [card.items[0]]);
   assert.deepEqual(visibleItems({}, '10min'), []);
 });
 

@@ -47,7 +47,9 @@ test('prepareWorkdir creates exactly the allowed files; cleanup removes them', a
     source: path.join(d, 'source.json'), digestRules: path.join(d, 'digest.md'),
     researchContext: path.join(d, 'ctx.md'), previousDigest: path.join(d, 'prev.json'),
   });
-  assert.deepEqual((await fs.readdir(w2)).sort(), ['TASK.md', 'digest.json', 'digest.md', 'research-context.md', 'source.json']);
+  // The research-context feature is gone: a stray option copies nothing.
+  assert.deepEqual((await fs.readdir(w2)).sort(), ['TASK.md', 'digest.json', 'digest.md', 'source.json']);
+  assert.doesNotMatch(await fs.readFile(path.join(w2, 'TASK.md'), 'utf8'), /research-context/);
   await cleanupWorkdir(w2);
   await cleanupWorkdir(w2); // idempotent
   await fs.rm(d, { recursive: true });

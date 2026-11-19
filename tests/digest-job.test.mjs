@@ -4,6 +4,7 @@ import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
 import { createDigestJobs, redactPaths } from '../src/agent/digest-job.mjs';
+import { fullDigest } from './fixtures/digest-fixture.mjs';
 
 const SOURCE = {
   id: 'p1',
@@ -11,12 +12,8 @@ const SOURCE = {
   pages: [{ page: 1 }],
   sentences: { 'p1-s1': { text: 'a', page: 1 }, 'p1-s2': { text: 'b', page: 1 } },
 };
-const GOOD = {
-  version: 1, paperId: 'p1',
-  takeaway: { text: 't', evidence: ['p1-s1'], why: 'w' },
-  cards: [{ id: 'c1', section: 'method', question: 'q', answer: 'a', bridge: '', items: [{ kind: 'claim', text: 'ok', evidence: ['p1-s2'] }] }],
-  glossary: [],
-};
+// One-page source: 8 cards minimum, but all nine sections are needed.
+const GOOD = fullDigest({ paperId: 'p1', evidence: 'p1-s2', cards: 9 });
 const BAD = { ...GOOD, cards: [{ ...GOOD.cards[0], items: [{ kind: 'claim', text: 'bad', evidence: ['p9-s9'] }] }] };
 const OLD = { ...GOOD, takeaway: { text: 'old', evidence: ['p1-s1'], why: 'w' } };
 
@@ -103,7 +100,7 @@ test('first attempt passes: done, digest.json replaced, digest.prev.json keeps t
   assert.deepEqual((await fs.readdir(path.join(c2.out, 'p1'))).sort(), ['digest.json', 'digest.prev.json', 'source.json']);
 });
 
-test('research context file is copied when configured', async (t) => {
+test('a leftover researchContextFile setting is ignored silently', async (t) => {
   const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-ctx-'));
   t.after(() => fs.rm(tmp, { recursive: true, force: true }));
   const ctxFile = path.join(tmp, 'ctx.md');
@@ -112,7 +109,22 @@ test('research context file is copied when configured', async (t) => {
   const c = await setup(t, { runs, researchContext: ctxFile });
   await c.jobs.start('p1');
   await settled(c.jobs, 'p1');
-  assert.ok(c.calls[0].files.includes('research-context.md'));
+  const job = c.jobs.get('p1');
+  assert.equal(job.state, 'done', job.message);
+  assert.deepEqual(c.calls[0].files, ['TASK.md', 'digest.md', 'source.json']);
+  assert.ok(!job.log.some((l) => l.includes('연구 맥락')));
+});
+
+test('a digest with an opinion item is retried with the opinion problem', async (t) => {
+  const runs = [];
+  const c = await setup(t, { runs });
+  const withOpinion = structuredClone(GOOD);
+  withOpinion.cards[0].items.push({ kind: 'opinion', text: '이 결과는 의미 있다', evidence: [] });
+  runs.push(c.writeDigest(withOpinion), c.writeDigest(GOOD));
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.jobs.get('p1').state, 'done');
+  assert.match(c.calls[1].prompt, /c1: 해석·의견 항목은 쓰지 않습니다 – 이 결과는 의미 있다/);
 });
 
 test('fail once then pass: attempt 2, second prompt lists the problems, previous digest kept in workdir', async (t) => {
