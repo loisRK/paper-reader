@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, sharedFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -198,6 +198,20 @@ test('singleFlight: ignores calls while running, allows again afterwards', async
   release(); await first;
   const second = f(); release(); await second;
   assert.equal(calls, 2);
+});
+
+test('sharedFlight: concurrent calls share one run; a run that finishes without awaiting does not stick', async () => {
+  let calls = 0;
+  const sync = sharedFlight(async () => { calls += 1; return calls; });
+  assert.equal(await sync(), 1);
+  assert.equal(await sync(), 2); // must run again, not return the stale first result
+  let release;
+  const slow = sharedFlight(() => { calls += 1; return new Promise((r) => { release = r; }); });
+  const a = slow(); const b = slow();
+  assert.equal(a, b);
+  release('done');
+  assert.equal(await a, 'done');
+  assert.equal(calls, 3);
 });
 
 import { debounce, memosVisible } from '../src/reader/public/views/card-memos.js';

@@ -65,6 +65,21 @@ export function singleFlight(fn) {
   };
 }
 
+// Concurrent calls share one run. The slot is cleared after the run settles, even when fn
+// finishes without awaiting (a `x ??= (async () => { finally { x = null } })()` pattern would
+// re-store the settled promise after the finally and return it forever).
+export function sharedFlight(fn) {
+  let running = null;
+  return () => {
+    if (running) return running;
+    const p = (async () => fn())();
+    running = p;
+    const clear = () => { if (running === p) running = null; };
+    p.then(clear, clear);
+    return p;
+  };
+}
+
 export function statusText(status, pending) {
   switch (status) {
     case 'connected': return 'Zotero 연결됨';
@@ -232,24 +247,17 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
 
   // Saves typed memo text first; on failure (toast) the popover stays open with the text.
   // Resolves true when closed.
-  let closing = null;
-  function closePopover() {
-    if (!s.pop) return Promise.resolve(true);
-    closing ??= (async () => {
-      try {
-        for (const e of unsavedEdits()) {
-          const value = e.area.value;
-          if (!(await e.put({ comment: value }))) return false;
-          e.original = value;
-        }
-        removePopover();
-        return true;
-      } finally {
-        closing = null;
-      }
-    })();
-    return closing;
-  }
+  const closeRun = sharedFlight(async () => {
+    if (!s.pop) return true;
+    for (const e of unsavedEdits()) {
+      const value = e.area.value;
+      if (!(await e.put({ comment: value }))) return false;
+      e.original = value;
+    }
+    removePopover();
+    return true;
+  });
+  const closePopover = () => (s.pop ? closeRun() : Promise.resolve(true));
 
   function place(node, rect) {
     node.style.top = `${Math.max(8, Math.min(window.innerHeight - node.offsetHeight - 8, rect.bottom + 6))}px`;
