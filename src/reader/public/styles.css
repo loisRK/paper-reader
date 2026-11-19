@@ -254,6 +254,15 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .refs { margin: 2rem 0; color: var(--muted); font-size: .88rem; line-height: 1.6; }
 .refs summary { cursor: pointer; font-weight: 600; color: var(--text); font-size: 1rem; }
 .ref { margin: .4rem 0; }
+.fig-text { margin: .8rem 0; color: var(--muted); font-size: .88rem; line-height: 1.6; }
+.fig-text summary { cursor: pointer; font-weight: 600; color: var(--text); font-size: .9rem; }
+.src-figure { margin: 1rem 0; text-align: center; border-radius: 6px; transition: box-shadow .25s; scroll-margin: 4rem; }
+.src-figure img { max-width: 100%; height: auto; background: #fff; border-radius: 6px; padding: 4px; }
+.src-figure a { display: inline-block; }
+.src-figure [hidden] { display: none; }
+.src-figure.flash { box-shadow: 0 0 0 3px var(--hl-ring, var(--accent)); }
+.fig-fail { font-size: .88rem; }
+.fig-show { margin-left: .5rem; }
 .sent { border-radius: 3px; transition: background-color .25s, opacity .2s, box-shadow .25s; scroll-margin: 4rem; }
 .sent.hl { background: var(--hl); box-shadow: 0 0 0 2px var(--hl); outline: 1px solid var(--hl-ring); }
 

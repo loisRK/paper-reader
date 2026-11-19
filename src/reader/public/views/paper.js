@@ -57,6 +57,30 @@ export function glossarySegments(text, glossary, seen) {
   return out;
 }
 
+export function figureSlug(label) {
+  return String(label ?? '').toLowerCase().replace(/\s+/g, '-').replace(/[^a-z0-9-]/g, '');
+}
+
+// Card figure {label, page} → source.figures entry (same page preferred, else first label match).
+export function findFigure(figures, f) {
+  const hits = (Array.isArray(figures) ? figures : []).filter((x) => x && x.label === f?.label);
+  return hits.find((x) => x.page === f?.page) ?? hits[0] ?? null;
+}
+
+// blockId → { figure, role }. Only figures with an image take part; legacy extractions → empty Map.
+export function figureLayout(source) {
+  const out = new Map();
+  const blocks = source?.blocks ?? [];
+  for (const fig of source?.figures ?? []) {
+    if (!fig?.image) continue;
+    const cap = blocks.find((b) => (b.sentenceIds ?? []).includes(fig.captionSentenceId));
+    if (!cap) continue;
+    out.set(cap.id, { figure: fig, role: 'image-before' });
+    for (const id of fig.blockIds ?? []) if (!out.has(id)) out.set(id, { figure: fig, role: 'folded' });
+  }
+  return out;
+}
+
 // ---------- DOM ----------
 
 function richText(text, glossary, seen) {
@@ -76,14 +100,21 @@ function evidenceButton(ids, onEvidence, cardId) {
   }, '🔗');
 }
 
-function figureLine(f, links) {
-  const pageText = `p.${f.page}`;
+function pageLink(page, links) {
+  return links.zoteroPdf
+    ? el('a', { href: `${links.zoteroPdf}?page=${page}`, text: `Zotero에서 p.${page} 열기` })
+    : el('span', { class: 'muted', text: `p.${page}` });
+}
+
+function figureLine(f, links, onShow) {
   return el('li', { class: 'figure' },
     el('span', { class: 'figure-label', text: f.label || '그림' }),
     ' ',
-    links.zoteroPdf
-      ? el('a', { href: `${links.zoteroPdf}?page=${f.page}`, text: `Zotero에서 ${pageText} 열기` })
-      : el('span', { class: 'muted', text: pageText }),
+    pageLink(f.page, links),
+    onShow ? el('button', {
+      type: 'button', class: 'btn btn-quiet fig-show', 'aria-label': `원문에서 ${f.label} 보기`,
+      onclick: (e) => { e.stopPropagation(); onShow(f); },
+    }, '원문에서 보기') : null,
     f.note ? el('span', { class: 'figure-note', text: ` — ${f.note}` }) : null,
   );
 }
@@ -101,7 +132,7 @@ function tableNode(t, onEvidence, cardId) {
   );
 }
 
-function sourcePanel(source, links, onClose) {
+function sourcePanel(source, links, onClose, paperId) {
   const meta = source.meta ?? {};
   const authors = meta.authors ?? [];
   const sentences = source.sentences ?? {};
@@ -116,8 +147,36 @@ function sourcePanel(source, links, onClose) {
     return [el('span', { class: 'sent', id: sentenceHtmlId(sid), dataset: { sid }, text: s.text }), ' '];
   });
 
+  const layout = figureLayout(source);
+  const blockEl = (b) => {
+    const ids = b.sentenceIds ?? [];
+    if (b.type === 'heading') return el('h3', { class: 'src-heading' }, sentenceSpans(ids));
+    if (b.type === 'caption') return el('p', { class: 'caption' }, sentenceSpans(ids));
+    return el('p', { class: 'para' }, sentenceSpans(ids));
+  };
+  const blockById = new Map((source.blocks ?? []).map((b) => [b.id, b]));
+  const figureNode = (fig) => {
+    const src = `/api/papers/${encodeURIComponent(paperId)}/figures/${encodeURIComponent(fig.image)}`;
+    const cap = sentences[fig.captionSentenceId]?.text ?? fig.label ?? '';
+    const img = el('img', { loading: 'lazy', decoding: 'async', alt: cap, src });
+    const link = el('a', { href: src, target: '_blank', rel: 'noopener noreferrer', title: '새 탭에서 원본 크기로 열기' }, img);
+    const fail = el('p', { class: 'fig-fail muted', hidden: true }, '그림을 불러오지 못했습니다 — ', pageLink(fig.page, links));
+    img.addEventListener('error', () => { link.hidden = true; fail.hidden = false; });
+    return el('figure', { class: 'src-figure', id: `fig-${figureSlug(fig.label)}` }, link, fail);
+  };
+  const foldedText = (fig) => {
+    // document order, whichever side of the caption the blocks sit on
+    const order = (source.blocks ?? []).filter((x) => (fig.blockIds ?? []).includes(x.id));
+    if (!order.length) return null;
+    const d = el('details', { class: 'fig-text' }, el('summary', { text: '그림 속 글자 보기' }));
+    for (const x of order) d.append(blockEl(x));
+    return d;
+  };
+
   for (const b of source.blocks ?? []) {
     const ids = b.sentenceIds ?? [];
+    const lay = layout.get(b.id);
+    if (lay?.role === 'folded') continue;
     if (b.type === 'references') {
       if (!refs) {
         refs = el('details', { class: 'refs' });
@@ -132,9 +191,12 @@ function sourcePanel(source, links, onClose) {
       body.append(el('div', { class: 'page-mark', 'aria-hidden': 'true', text: `p.${b.page}` }));
       lastPage = b.page;
     }
-    if (b.type === 'heading') body.append(el('h3', { class: 'src-heading' }, sentenceSpans(ids)));
-    else if (b.type === 'caption') body.append(el('p', { class: 'caption' }, sentenceSpans(ids)));
-    else body.append(el('p', { class: 'para' }, sentenceSpans(ids)));
+    if (lay?.role === 'image-before') {
+      body.append(figureNode(lay.figure));
+      const d = foldedText(lay.figure);
+      if (d) body.append(d);
+    }
+    body.append(blockEl(b));
   }
   if (refs) refs.querySelector('summary').textContent = `참고문헌 (${refsCount})`;
 
@@ -178,7 +240,7 @@ export function render(container, data, actions) {
 
   const root = el('div', { class: 'paper' });
   const flow = el('section', { class: 'flow', 'aria-label': '요약 흐름' });
-  const source_ = sourcePanel(source, links, () => setSheet(false));
+  const source_ = sourcePanel(source, links, () => setSheet(false), data.id);
   const progressSlot = el('div', { class: 'top-progress' });
 
   const save = () => {
@@ -235,6 +297,20 @@ export function render(container, data, actions) {
     }
   }
 
+  const figLayout = figureLayout(source);
+  const hasImage = (f) => Boolean(findFigure(source.figures, f)?.image) && figLayout.size > 0;
+  function showFigure(f) {
+    const fig = findFigure(source.figures, f);
+    const node = fig ? source_.querySelector(`#fig-${CSS.escape(figureSlug(fig.label))}`) : null;
+    if (!node) { actions.toast('원문에서 그림을 찾지 못했습니다.'); return; }
+    const go = () => {
+      node.scrollIntoView({ block: 'center', behavior: matchMedia('(prefers-reduced-motion: reduce)').matches ? 'auto' : 'smooth' });
+      node.classList.add('flash');
+      setTimeout(() => node.classList.remove('flash'), 1200);
+    };
+    if (mobile.matches) { setSheet(true); requestAnimationFrame(go); } else go();
+  }
+
   function renderProgress() {
     const ids = new Set(cards.map((c) => c.id));
     const done = [...state.read].filter((r) => ids.has(r)).length;
@@ -281,7 +357,7 @@ export function render(container, data, actions) {
       evidenceButton(b.evidence, showEvidence, card.id),
     ))) : null,
     full && card.tables?.length ? card.tables.map((t) => tableNode(t, showEvidence, card.id)) : null,
-    full && card.figures?.length ? el('ul', { class: 'figures', 'aria-label': '그림' }, card.figures.map((f) => figureLine(f, links))) : null,
+    full && card.figures?.length ? el('ul', { class: 'figures', 'aria-label': '그림' }, card.figures.map((f) => figureLine(f, links, hasImage(f) ? showFigure : null))) : null,
     memos?.memoNode(card.id),
     el('label', { class: 'read-check' }, check, ' 읽음'),
     );

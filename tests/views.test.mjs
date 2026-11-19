@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
-import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence } from '../src/reader/public/views/paper.js';
+import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure } from '../src/reader/public/views/paper.js';
 import { progressPercent } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
@@ -289,4 +289,47 @@ test('popoverDownAction: outside text closes, same sentence toggles closed, othe
   assert.equal(popoverDownAction({ ...base, sid: null, marked: false }), 'close');
   assert.equal(popoverDownAction({ ...base, sid: 'p1-s1', marked: true }), 'close');
   assert.equal(popoverDownAction({ ...base, sid: 'p1-s2', marked: true }), 'reopen');
+});
+
+const figSrc = (figs) => ({
+  blocks: [
+    { id: 'b1', type: 'paragraph', page: 2, sentenceIds: ['s1'] },
+    { id: 'b2', type: 'paragraph', page: 3, sentenceIds: ['s2'], inFigure: 'Figure 1' },
+    { id: 'b3', type: 'caption', page: 3, sentenceIds: ['s3'] },
+    { id: 'b4', type: 'paragraph', page: 3, sentenceIds: ['s4'], inFigure: 'Figure 1' },
+  ],
+  figures: figs,
+});
+
+test('figureLayout: 이미지 있는 그림 → 캡션 image-before, blockIds folded', () => {
+  const f = { label: 'Figure 1', page: 3, captionSentenceId: 's3', image: 'fig-3-1.png', blockIds: ['b2', 'b4'] };
+  const m = figureLayout(figSrc([f]));
+  assert.deepEqual([...m.keys()].sort(), ['b2', 'b3', 'b4']);
+  assert.equal(m.get('b3').role, 'image-before');
+  assert.equal(m.get('b3').figure, f);
+  assert.equal(m.get('b2').role, 'folded');
+  assert.equal(m.get('b4').role, 'folded');
+});
+
+test('figureLayout: image null / figures 없음 / 옛 추출본 → 빈 Map', () => {
+  assert.equal(figureLayout(figSrc([{ label: 'Figure 1', page: 3, captionSentenceId: 's3', image: null, blockIds: ['b2'] }])).size, 0);
+  assert.equal(figureLayout({ blocks: [] }).size, 0);
+  assert.equal(figureLayout(undefined).size, 0);
+  assert.equal(figureLayout(figSrc([{ label: 'Figure 1', page: 3, captionSentenceId: 's3' }])).size, 0);
+});
+
+test('figureLayout: 캡션 블록을 못 찾으면 그 그림은 건너뜀', () => {
+  const f = { label: 'Figure 1', page: 3, captionSentenceId: 'nope', image: 'a.png', blockIds: ['b2'] };
+  assert.equal(figureLayout(figSrc([f])).size, 0);
+});
+
+test('figureSlug / findFigure', () => {
+  assert.equal(figureSlug('Figure 1'), 'figure-1');
+  assert.equal(figureSlug('Fig. 2(a)'), 'fig-2a');
+  const a = { label: 'Figure 1', page: 3, image: 'x.png' };
+  const b = { label: 'Figure 1', page: 7, image: 'y.png' };
+  assert.equal(findFigure([a, b], { label: 'Figure 1', page: 7 }), b);
+  assert.equal(findFigure([a, b], { label: 'Figure 1', page: 9 }), a);
+  assert.equal(findFigure([a], { label: 'Figure 2', page: 3 }), null);
+  assert.equal(findFigure(undefined, { label: 'Figure 1' }), null);
 });
