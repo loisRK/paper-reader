@@ -5,6 +5,7 @@ import path from 'node:path';
 import { spawn } from 'node:child_process';
 import { agentCommand } from './commands.mjs';
 import { paperText, figuresText } from './paper-text.mjs';
+import { cleanModel } from './models.mjs';
 
 const taskMd = (id, pages) => `# 작업
 
@@ -106,6 +107,19 @@ export function summarizeGeminiLine(line) {
 
 const SUMMARIZERS = { claude: summarizeStreamLine, gemini: summarizeGeminiLine };
 
+/** The model a run reports at start: Claude/Gemini stream-json init event, Codex's `model: …` header line. */
+function modelFrom(id, line) {
+  if (id === 'codex') {
+    const m = /^model:\s*(\S+)\s*$/.exec(line.trim());
+    return m ? cleanModel(m[1]) : null;
+  }
+  let o;
+  try { o = JSON.parse(line); } catch { return null; }
+  if (id === 'claude' && o?.type === 'system' && o.subtype === 'init') return cleanModel(o.model);
+  if (id === 'gemini' && o?.type === 'init') return cleanModel(o.model);
+  return null;
+}
+
 const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|set an auth method|GEMINI_API_KEY|UNAUTHENTICATED/i;
 const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached|RESOURCE_EXHAUSTED/i;
 
@@ -139,6 +153,7 @@ export function runAgent({
   let timedOut = false;
   let killed = false;
   let tail = '';
+  let model = null;
   let timer = null;
   let graceTimer = null;
   let waitTimer = null;
@@ -167,6 +182,7 @@ export function runAgent({
 
   const emit = (line, summarize) => {
     if (!line.trim()) return;
+    if (!model && line.length < 100_000) model = modelFrom(id, line);
     const out = summarize ? summarize(line) : line;
     // Hint detection uses plain text only: never the raw stream-json (it may quote paper text).
     if (!summarize) tail = (tail + '\n' + line).slice(-4000);
@@ -201,6 +217,7 @@ export function runAgent({
     child.on('error', () => finish({ code: null, signal: null, timedOut, errorHint: SPAWN_FAIL }));
     child.on('close', (code, signal) => {
       const result = { code, signal, timedOut };
+      if (model) result.model = model;
       if (code !== 0 && !timedOut) {
         const hint = hintFor(id, tail);
         if (hint) result.errorHint = hint;

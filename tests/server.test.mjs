@@ -751,7 +751,10 @@ test('agents API: list with selection, default first available, PUT validation a
     { id: 'claude', name: 'Claude Code', available: true, version: '2.1.0' },
     { id: 'codex', name: 'Codex', available: false, message: '설치되어 있지 않습니다' },
   ];
-  const s = createServer({ outputDir: tmp, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { detectAgents });
+  const home = path.join(tmp, 'home');
+  await fs.mkdir(path.join(home, '.claude'), { recursive: true });
+  await fs.writeFile(path.join(home, '.claude', 'settings.json'), JSON.stringify({ model: 'opus', env: { SECRET: 'x' } }));
+  const s = createServer({ outputDir: tmp, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { detectAgents, home, env: {} });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
   t.after(async () => { s.close(); await fs.rm(tmp, { recursive: true, force: true }); });
   const b = `http://127.0.0.1:${s.address().port}`;
@@ -759,6 +762,10 @@ test('agents API: list with selection, default first available, PUT validation a
   const g = await (await fetch(`${b}/api/agents`)).json();
   assert.equal(g.agents.length, 2);
   assert.equal(g.selected, 'claude');
+  assert.equal(g.agents[0].configuredModel, 'opus');
+  assert.equal(g.agents[0].lastModel, null);
+  assert.equal(g.agents[1].configuredModel, '기본값 (계정 플랜에 따라 정해짐)');
+  assert.doesNotMatch(JSON.stringify(g), /SECRET/);
   assert.equal((await pj({ agent: 'claude' }, { 'content-type': 'text/plain' })).status, 415);
   const bad = await pj({ agent: 'codex' });
   assert.equal(bad.status, 400);
@@ -802,7 +809,7 @@ async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf 
   };
   const detectAgents = async () => agents ?? [{ id: 'codex', name: 'Codex', available: true }, { id: 'claude', name: 'Claude Code', available: false }];
   const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } },
-    { examplesDir: examples, detectAgents, runAgent, extractFile, ...(md5File ? { md5File } : {}) });
+    { examplesDir: examples, detectAgents, runAgent, extractFile, home: path.join(tmp, 'home'), env: {}, ...(md5File ? { md5File } : {}) });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
   t.after(async () => { s.close(); await s.digestJobs?.shutdown(); await fs.rm(tmp, { recursive: true, force: true }); });
   const b = `http://127.0.0.1:${s.address().port}`;
@@ -816,7 +823,7 @@ async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf 
     }
     throw new Error('job did not settle');
   };
-  return { s, b, out, root, jpost, job, settle, calls };
+  return { s, b, out, root, jpost, job, settle, calls, dataDir };
 }
 const goodDigest = (id) => fullDigest({ paperId: id, evidence: 'p1-s1', cards: 12 });
 
@@ -977,4 +984,16 @@ test('digest API: folder PDF identical to an existing paper runs on that paper, 
   assert.equal((await ctx.job('d1')).state, 'done');
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(ctx.out, 'd1', 'digest.json'), 'utf8')), goodDigest('d1'));
   assert.deepEqual((await fs.readdir(ctx.out)).sort(), ['d1']);
+});
+
+test('agents API: the model a digest run reported shows as lastModel', async (t) => {
+  const ctx = await digestServer(t, { runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest('d1'))); return { code: 0, model: 'gpt-5-codex' }; }] });
+  assert.equal((await ctx.jpost('/api/papers/d1/digest')).status, 202);
+  assert.equal((await ctx.settle('d1')).state, 'done');
+  const g = await (await fetch(`${ctx.b}/api/agents`)).json();
+  const codex = g.agents.find((a) => a.id === 'codex');
+  assert.equal(codex.lastModel.model, 'gpt-5-codex');
+  assert.ok(!Number.isNaN(Date.parse(codex.lastModel.at)));
+  assert.equal(g.agents.find((a) => a.id === 'claude').lastModel, null);
+  assert.equal(JSON.parse(await fs.readFile(path.join(ctx.dataDir, 'settings.json'), 'utf8')).lastModels.codex.model, 'gpt-5-codex');
 });

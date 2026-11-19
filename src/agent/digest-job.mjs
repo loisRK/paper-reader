@@ -44,6 +44,7 @@ export function redactPaths(text) {
  *  selectAgent() => Promise<'claude'|'codex'|null>
  *  findFolderPdf(id) => Promise<boolean>   (scanned folder PDF not yet extracted)
  *  extract(id) => Promise                  (stage 2 extraction; shares its busy flag)
+ *  recordModel({ agent, model }) => Promise  (the model a run reported; failures are ignored)
  *  runAgent, prepareWorkdir, cleanupWorkdir, buildPrompt, rulesFile, examplesDir, timeoutMs  (overridable)
  */
 export function createDigestJobs({ cfg, deps = {} }) {
@@ -58,6 +59,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
     rulesFile = RULES_FILE,
     examplesDir,
     timeoutMs,
+    recordModel = async () => {},
     shutdownWaitMs = 10_000,
   } = deps;
   const out = cfg.outputDir;
@@ -155,6 +157,9 @@ export function createDigestJobs({ cfg, deps = {} }) {
         });
         const result = await ctx.handle.done;
         ctx.handle = null;
+        if (result.model) {
+          try { await recordModel({ agent: job.agent, model: result.model }); } catch (err) { console.error('[digest-job] recordModel', err?.code ?? ''); }
+        }
         if (ctx.cancelled) return;
         if (result.timedOut) return fail(TIMEOUT_MESSAGE);
         if (result.code !== 0) {

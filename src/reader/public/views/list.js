@@ -189,6 +189,21 @@ function folderSection(folders, actions, hashing) {
   );
 }
 
+const DEFAULT_MODEL_TEXT = '기본값 (계정 플랜에 따라 정해짐)';
+const pad2 = (n) => String(n).padStart(2, '0');
+
+/** Two short lines under the tool picker: configured model, and the model the last run reported (local time). */
+export function modelLines(agent) {
+  const lines = [`설정된 모델: ${agent?.configuredModel || DEFAULT_MODEL_TEXT}`];
+  const last = agent?.lastModel;
+  if (last?.model) {
+    const d = new Date(last.at);
+    const when = Number.isNaN(d.getTime()) ? '' : ` · ${d.getMonth() + 1}월 ${d.getDate()}일 ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+    lines.push(`최근 실행: ${last.model}${when}`);
+  }
+  return lines;
+}
+
 // "AI 도구: [Claude Code ▾]" — loads asynchronously (detection runs the tools' --version).
 function agentPicker(actions) {
   const box = el('div', { class: 'agent-picker' }, el('span', { class: 'folder-note', text: 'AI 도구 확인 중…' }));
@@ -221,10 +236,12 @@ function agentPicker(actions) {
         select.disabled = false;
       }
     });
+    const current = agents.find((a) => a.id === info.selected);
     setChildren(box,
       el('label', { class: 'sr-only', for: 'agent-select', text: 'AI 도구' }),
       select,
       el('span', { class: 'folder-note', text: '요약 만들기에 쓸 도구입니다.' }),
+      current ? el('div', { class: 'agent-models' }, modelLines(current).map((t) => el('span', { class: 'folder-note', text: t }))) : null,
     );
   };
   actions.agents().then(draw, (err) => setChildren(box, el('p', { class: 'folder-note', text: `AI 도구를 확인하지 못했습니다: ${err.message}` })));

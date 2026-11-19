@@ -609,3 +609,13 @@ test('digestTracker: remembers started ids, forgets on untrack, survives storage
   assert.deepEqual(digestTracker(null).ids(), []);
   assert.deepEqual(digestTracker({ getItem: () => '{bad', setItem() {} }).ids(), []);
 });
+
+import { modelLines } from '../src/reader/public/views/list.js';
+
+test('modelLines: configured model and the last run (local M월 D일 HH:mm)', () => {
+  const at = new Date(2026, 10, 19, 9, 5).toISOString();
+  assert.deepEqual(modelLines({ configuredModel: 'opus', lastModel: { model: 'claude-opus-4-5', at } }), ['설정된 모델: opus', '최근 실행: claude-opus-4-5 · 11월 19일 09:05']);
+  assert.deepEqual(modelLines({ configuredModel: '기본값 (계정 플랜에 따라 정해짐)', lastModel: null }), ['설정된 모델: 기본값 (계정 플랜에 따라 정해짐)']);
+  assert.deepEqual(modelLines({}), ['설정된 모델: 기본값 (계정 플랜에 따라 정해짐)']);
+  assert.deepEqual(modelLines({ configuredModel: 'x', lastModel: { model: 'm', at: 'garbage' } }), ['설정된 모델: x', '최근 실행: m']);
+});

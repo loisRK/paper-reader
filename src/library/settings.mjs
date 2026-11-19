@@ -14,14 +14,44 @@ export class SettingsError extends Error {
 
 const settingsFile = (dataDir) => path.join(dataDir, 'settings.json');
 
+const isObj = (v) => v !== null && typeof v === 'object' && !Array.isArray(v);
+
+// lastModels: { <key>: { model, at } } — the model a tool last reported when it ran.
+function cleanLastModels(v) {
+  if (!isObj(v)) return undefined;
+  const out = {};
+  for (const [k, e] of Object.entries(v)) {
+    if (isObj(e) && typeof e.model === 'string' && typeof e.at === 'string') out[k] = { model: e.model, at: e.at };
+  }
+  return Object.keys(out).length ? out : undefined;
+}
+
 export async function readSettings(dataDir) {
   try {
     const v = JSON.parse(await fs.readFile(settingsFile(dataDir), 'utf8'));
     const folders = Array.isArray(v?.folders) ? v.folders.filter((f) => typeof f === 'string') : [];
-    return AGENT_IDS.includes(v?.agent) ? { folders, agent: v.agent } : { folders };
+    const out = { folders };
+    if (AGENT_IDS.includes(v?.agent)) out.agent = v.agent;
+    const lastModels = cleanLastModels(v?.lastModels);
+    if (lastModels) out.lastModels = lastModels;
+    return out;
   } catch {
     return { folders: [] };
   }
+}
+
+async function writeAtomic(dataDir, next) {
+  const file = settingsFile(dataDir);
+  await fs.mkdir(dataDir, { recursive: true });
+  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
+  await fs.writeFile(tmp, JSON.stringify(next, null, 2));
+  await fs.rename(tmp, file);
+}
+
+export async function recordLastModel(dataDir, key, model, at = new Date().toISOString()) {
+  const saved = await readSettings(dataDir);
+  saved.lastModels = { ...(saved.lastModels ?? {}), [key]: { model: String(model).slice(0, 100), at } };
+  await writeAtomic(dataDir, saved);
 }
 
 // `saved`: folders already in the settings. Only NEW paths must exist now, so an unplugged disk
@@ -57,9 +87,6 @@ export async function writeSettings(dataDir, { folders, agent } = {}) {
     if (!AGENT_IDS.includes(agent)) throw new SettingsError('알 수 없는 AI 도구입니다.');
     next.agent = agent;
   } else if (saved.agent) next.agent = saved.agent;
-  const file = settingsFile(dataDir);
-  await fs.mkdir(dataDir, { recursive: true });
-  const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
-  await fs.writeFile(tmp, JSON.stringify(next, null, 2));
-  await fs.rename(tmp, file);
+  if (saved.lastModels) next.lastModels = saved.lastModels;
+  await writeAtomic(dataDir, next);
 }

@@ -29,7 +29,7 @@ async function waitFor(fn, ms = 2000) {
 const exists = (p) => fs.access(p).then(() => true, () => false);
 
 // outputDir with p1 (source + old digest), an example paper, and a rules file.
-async function setup(t, { pdfIds = [], extract, runs, agent = 'claude', researchContext } = {}) {
+async function setup(t, { pdfIds = [], extract, runs, agent = 'claude', researchContext, recordModel } = {}) {
   const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-job-')));
   t.after(() => fs.rm(tmp, { recursive: true, force: true }));
   const out = path.join(tmp, 'out');
@@ -67,6 +67,7 @@ async function setup(t, { pdfIds = [], extract, runs, agent = 'claude', research
       findFolderPdf: async (id) => pdfIds.includes(id),
       extract: extract ?? (async () => { throw new Error('no extract'); }),
       examplesDir: path.join(tmp, 'examples'),
+      ...(recordModel ? { recordModel } : {}),
     },
   });
   await fs.mkdir(path.join(tmp, 'examples', 'ex1'), { recursive: true });
@@ -359,4 +360,24 @@ test('cancel during an extraction that then fails ends cancelled, not failed', a
   release();
   await settled(c.jobs, 'f1');
   assert.equal(c.jobs.get('f1').state, 'cancelled');
+});
+
+test('the model a run reports is recorded (even when the attempt fails), never the job state', async (t) => {
+  const runs = [];
+  const recorded = [];
+  const c = await setup(t, { runs, agent: 'gemini', recordModel: async (r) => { recorded.push(r); } });
+  runs.push(async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(GOOD)); return { code: 0, signal: null, timedOut: false, model: 'gemini-2.5-pro' }; });
+  await c.jobs.start('p1');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.jobs.get('p1').state, 'done');
+  assert.deepEqual(recorded, [{ agent: 'gemini', model: 'gemini-2.5-pro' }]);
+
+  const runs2 = [];
+  const rec2 = [];
+  const c2 = await setup(t, { runs: runs2, recordModel: async (r) => { rec2.push(r); throw new Error('disk full'); } });
+  runs2.push(async () => ({ code: 1, signal: null, timedOut: false, model: 'claude-opus-4-5' }));
+  await c2.jobs.start('p1');
+  await settled(c2.jobs, 'p1');
+  assert.equal(c2.jobs.get('p1').state, 'failed'); // a failing recorder does not change the outcome
+  assert.deepEqual(rec2, [{ agent: 'claude', model: 'claude-opus-4-5' }]);
 });

@@ -314,3 +314,22 @@ test('runAgent gemini: login and quota hints', async () => {
   calls[0].child.emit('close', 1, null);
   assert.equal((await done).errorHint, 'AI 도구 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.');
 });
+
+test('runAgent reports the model from the first init event (claude, gemini) or the codex header', async () => {
+  for (const [id, out, err, model] of [
+    ['claude', '{"type":"system","subtype":"init","model":"claude-opus-4-5","tools":[]}\n{"type":"system","subtype":"init","model":"other"}\n', '', 'claude-opus-4-5'],
+    ['gemini', '{"type":"init","session_id":"s","model":"gemini-2.5-pro"}\n', '', 'gemini-2.5-pro'],
+    ['codex', 'workdir: /x\n', 'OpenAI Codex v0.50\nmodel: gpt-5-codex\nprovider: openai\n', 'gpt-5-codex'],
+    ['claude', '{"type":"result","is_error":false}\n', '', undefined],
+    ['gemini', '{"type":"init","model":"x\\u0000y"}\n', '', undefined],
+  ]) {
+    const { impl, calls } = fakeSpawn();
+    const { done } = runAgent({ id, workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+    calls[0].child.stdout.write(out);
+    calls[0].child.stderr.write(err);
+    calls[0].child.stdout.end(); calls[0].child.stderr.end();
+    await tick();
+    calls[0].child.emit('close', 0, null);
+    assert.equal((await done).model, model, `${id} ${out}`);
+  }
+});

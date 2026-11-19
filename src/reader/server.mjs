@@ -1,5 +1,6 @@
 import http from 'node:http';
 import fs from 'node:fs/promises';
+import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
@@ -7,7 +8,8 @@ import { validateDigest } from '../digest/validate.mjs';
 import { linkToZotero as defaultLinkToZotero } from '../zotero/link.mjs';
 import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
-import { readSettings, writeSettings } from '../library/settings.mjs';
+import { readSettings, writeSettings, recordLastModel } from '../library/settings.mjs';
+import { configuredModel } from '../agent/models.mjs';
 import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
@@ -195,6 +197,17 @@ export function createServer(cfg, deps = {}) {
     listFiles: (folders) => library.list(folders),
     ...(deps.linkTimeoutMs ? { linkTimeoutMs: deps.linkTimeoutMs } : {}),
   });
+  // Each tool's configured model (read-only from its own config) and the model it last reported in a run.
+  const home = deps.home ?? os.homedir();
+  const agentEnv = deps.env ?? process.env;
+  async function withModels(agents) {
+    const { lastModels = {} } = dataDir ? await readSettings(dataDir) : {};
+    return Promise.all(agents.map(async (a) => ({
+      ...a,
+      configuredModel: await configuredModel(a.id, { home, env: agentEnv }),
+      lastModel: lastModels[a.id] ?? null,
+    })));
+  }
   const selectedOf = (agents, saved) => (agents.find((a) => a.id === saved && a.available) ?? agents.find((a) => a.available))?.id ?? null;
   // One digest job at a time; folder PDFs are extracted through runExtract (same busy flag as manual extraction).
   const digestJobs = createDigestJobs({
@@ -210,6 +223,7 @@ export function createServer(cfg, deps = {}) {
         return (await library.list(folders)).files.some((f) => f.id === id);
       },
       extract: (id) => runExtract(id),
+      recordModel: async ({ agent, model }) => { if (dataDir) await recordLastModel(dataDir, agent, model); },
     },
   });
   // Retry linking unlinked folder papers in the background: one at a time, same paper not again within the cooldown.
@@ -255,14 +269,14 @@ export function createServer(cfg, deps = {}) {
       if (parts.length === 2) {
         if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
         const agents = await detectAgents();
-        return sendJson(res, 200, { agents, selected: selectedOf(agents, (await readSettings(dataDir)).agent) });
+        return sendJson(res, 200, { agents: await withModels(agents), selected: selectedOf(agents, (await readSettings(dataDir)).agent) });
       }
       if (method !== 'PUT') throw new HttpError(405, '허용되지 않는 메서드입니다.');
       const body = await readBody(req);
       const agents = await detectAgents();
       if (!agents.some((a) => a.id === body?.agent && a.available)) throw new HttpError(400, '이 AI 도구는 지금 쓸 수 없습니다.');
       await writeSettings(dataDir, { agent: body.agent });
-      return sendJson(res, 200, { agents, selected: body.agent });
+      return sendJson(res, 200, { agents: await withModels(agents), selected: body.agent });
     }
 
     if (parts[1] === 'library' && parts[2] === 'folders' && parts.length === 3) {
