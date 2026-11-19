@@ -181,6 +181,11 @@ function makeSync(ctx) {
     const html = noteHtml(cards, notes.cardMemos);
     if (n.zoteroKey) {
       if (n.conflict) return SKIP; // waits for resolveNoteConflict
+      if (n.zoteroEdited) {
+        // User chose to keep Zotero's note: never write over it; ask again (banner).
+        n.conflict = { at: now() };
+        return SKIP;
+      }
       const item = await writer.getItem(n.zoteroKey);
       if (item) {
         if (!isMine(item)) return;

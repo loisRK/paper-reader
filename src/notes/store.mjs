@@ -7,6 +7,8 @@
 //      note 목록(논문 항목 아래)은 따로 304 판정한다. 예전 숫자 값은 무시(null 취급)한다.
 //  - note.conflict: { at } | null  — Zotero에서 노트를 직접 고쳐 덮어쓰지 않은 상태.
 //      설정돼 있는 동안 upsert-note op는 대기열에 남되 전송하지 않는다. resolveNoteConflict로 해제.
+//  - note.zoteroEdited: true  — 사용자가 'Zotero 내용 유지'를 고른 상태. 이후 카드 메모를 고쳐도
+//      노트를 덮어쓰지 않고 conflict를 다시 세운다. 'overwrite'만 이 표시를 지운다.
 //  - tombstones: [하이라이트 레코드 사본]
 //      로컬에서 지웠지만 Zotero 삭제가 아직 안 된 하이라이트. delete-highlight op가 이것을 읽는다
 //      (지울 key가 notes.json에 남아 있어야만 Zotero 항목을 지운다). Zotero에서 그 사이 고쳐졌으면
@@ -190,13 +192,19 @@ export async function setCardMemo(outputDir, id, cardId, text) {
 }
 
 // After a Zotero-side note edit: 'overwrite' queues my memos over it; 'keep-zotero' drops the
-// queued note op and keeps local memos as-is (the next local memo edit writes again).
+// queued note op, keeps local memos as-is and marks the note zoteroEdited: later memo edits are
+// saved locally but raise the conflict again instead of writing, until the user picks 'overwrite'.
 export async function resolveNoteConflict(outputDir, id, choice) {
   if (choice !== 'overwrite' && choice !== 'keep-zotero') throw new Error(`알 수 없는 선택: ${choice}`);
   return mutate(outputDir, id, (notes, pending) => {
     notes.note.conflict = null;
-    if (choice === 'overwrite') enqueue(pending, 'upsert-note');
-    else pending.ops = pending.ops.filter((o) => o.op !== 'upsert-note');
+    if (choice === 'overwrite') {
+      delete notes.note.zoteroEdited;
+      enqueue(pending, 'upsert-note');
+    } else {
+      notes.note.zoteroEdited = true;
+      pending.ops = pending.ops.filter((o) => o.op !== 'upsert-note');
+    }
     return { value: { ...notes.note } };
   });
 }

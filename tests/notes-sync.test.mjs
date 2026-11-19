@@ -551,19 +551,46 @@ test('resolveNoteConflict overwrite → my memos are written over the Zotero not
   assert.equal(notes.note.conflict, null);
 });
 
-test('resolveNoteConflict keep-zotero → op dropped, local memos kept, next edit writes again', async () => {
+test('resolveNoteConflict keep-zotero → Zotero note stays; a later memo edit raises the conflict again, only overwrite writes', async () => {
   const { dir, w, key } = await noteConflictSetup();
   await resolveNoteConflict(dir, ID, 'keep-zotero');
-  const notes = await readNotes(dir, ID);
+  let notes = await readNotes(dir, ID);
   assert.equal(notes.note.conflict, null);
+  assert.equal(notes.note.zoteroEdited, true);
   assert.deepEqual(notes.cardMemos, { c1: 'mine', c2: 'second' });
   assert.deepEqual((await readPending(dir, ID)).ops, []);
   await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
   assert.equal(w.items.get(key).data.note, '<p>zotero edit</p>');
-  assert.equal((await readNotes(dir, ID)).note.conflict, null, 'no new conflict without a new Zotero edit');
+  assert.equal((await readNotes(dir, ID)).note.conflict, null, 'no new conflict without a new edit');
+
+  // next card-memo edit: saved locally, NOT written over the Zotero-edited note, banner back
   await setCardMemo(dir, ID, 'c3', 'third');
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.items.get(key).data.note, '<p>zotero edit</p>');
+  assert.equal(w.calls.filter((c) => c === 'patchItem').length, 0, 'never patched over the Zotero edit');
+  notes = await readNotes(dir, ID);
+  assert.ok(notes.note.conflict?.at, 'conflict raised again');
+  assert.equal(notes.note.zoteroEdited, true);
+  assert.equal(notes.cardMemos.c3, 'third');
+  assert.equal(r.pending, 1);
+  assert.deepEqual((await readPending(dir, ID)).ops.map((o) => o.op), ['upsert-note']);
+
+  // keep-zotero again: still protected
+  await resolveNoteConflict(dir, ID, 'keep-zotero');
+  await setCardMemo(dir, ID, 'c3', 'third!');
   await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
-  assert.equal(w.items.get(key).data.note, noteHtml(cards, { c1: 'mine', c2: 'second', c3: 'third' }));
+  assert.equal(w.items.get(key).data.note, '<p>zotero edit</p>');
+
+  // overwrite clears zoteroEdited and writes
+  await resolveNoteConflict(dir, ID, 'overwrite');
+  notes = await readNotes(dir, ID);
+  assert.equal(notes.note.conflict, null);
+  assert.ok(!notes.note.zoteroEdited);
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.items.get(key).data.note, noteHtml(cards, { c1: 'mine', c2: 'second', c3: 'third!' }));
+  await setCardMemo(dir, ID, 'c1', 'mine2');
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.items.get(key).data.note, noteHtml(cards, { c1: 'mine2', c2: 'second', c3: 'third!' }), 'normal edits write again after overwrite');
   await assert.rejects(() => resolveNoteConflict(dir, ID, 'bogus'));
 });
 
