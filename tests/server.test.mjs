@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import http from 'node:http';
 import { createServer } from '../src/reader/server.mjs';
 
 let dir, server, base;
@@ -411,6 +412,18 @@ test('serves figure images from paper dir, then examples dir', async () => {
     await fs.writeFile(path.join(ex, 'e1', 'figures', 'fig-2-1.png'), png2);
     await fs.writeFile(path.join(d, 'secret.png'), png);
     await fs.symlink(path.join(d, 'secret.png'), path.join(d, 'f1', 'figures', 'fig-9-9.png'));
+    // id collision: own dir has source.json but no figure; example has one -> must 404
+    await fs.mkdir(path.join(d, 'e1'));
+    await fs.writeFile(path.join(d, 'e1', 'source.json'), JSON.stringify({ id: 'e1', meta: { title: 'own' } }));
+    // figures dir symlinked outside
+    await fs.mkdir(path.join(d, 'f2'));
+    await fs.writeFile(path.join(d, 'f2', 'source.json'), JSON.stringify({ id: 'f2', meta: { title: 'f2' } }));
+    await fs.mkdir(path.join(d, 'outside'));
+    await fs.writeFile(path.join(d, 'outside', 'fig-1-1.png'), png);
+    await fs.symlink(path.join(d, 'outside'), path.join(d, 'f2', 'figures'));
+    await fs.mkdir(path.join(ex, 'e2', 'figures'), { recursive: true });
+    await fs.writeFile(path.join(ex, 'e2', 'source.json'), JSON.stringify({ id: 'e2', meta: { title: 'e2' } }));
+    await fs.writeFile(path.join(ex, 'e2', 'figures', 'fig-2-1.png'), png2);
     const s = createServer({ outputDir: d, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: ex });
     await new Promise((r) => s.listen(0, '127.0.0.1', r));
     const b = `http://127.0.0.1:${s.address().port}`;
@@ -422,9 +435,11 @@ test('serves figure images from paper dir, then examples dir', async () => {
       assert.equal(ok.headers.get('x-content-type-options'), 'nosniff');
       assert.equal(ok.headers.get('content-length'), String(png.length));
       assert.deepEqual(Buffer.from(await ok.arrayBuffer()), png);
-      const exr = await fetch(`${b}/api/papers/e1/figures/fig-2-1.png`);
+      const exr = await fetch(`${b}/api/papers/e2/figures/fig-2-1.png`);
       assert.equal(exr.status, 200);
       assert.deepEqual(Buffer.from(await exr.arrayBuffer()), png2);
+      assert.equal((await fetch(`${b}/api/papers/e1/figures/fig-2-1.png`)).status, 404);
+      assert.equal((await fetch(`${b}/api/papers/f2/figures/fig-1-1.png`)).status, 404);
       assert.equal((await fetch(`${b}/api/papers/f1/figures/..%2Fsource.json`)).status, 400);
       assert.equal((await fetch(`${b}/api/papers/f1/figures/fig-1-1.jpg`)).status, 400);
       assert.equal((await fetch(`${b}/api/papers/..%2Ff1/figures/fig-1-1.png`)).status, 400);
@@ -443,10 +458,8 @@ test('serves figure images from paper dir, then examples dir', async () => {
 
 test('figure endpoint rejects bad Host', async () => {
   const res = await new Promise((resolve, reject) => {
-    import('node:http').then(({ default: http }) => {
-      const u = new URL(`${base}/api/papers/p1/figures/fig-1-1.png`);
-      http.get({ host: u.hostname, port: u.port, path: u.pathname, headers: { host: 'evil.example' } }, resolve).on('error', reject);
-    });
+    const u = new URL(`${base}/api/papers/p1/figures/fig-1-1.png`);
+    http.get({ host: u.hostname, port: u.port, path: u.pathname, headers: { host: 'evil.example' } }, resolve).on('error', reject);
   });
   assert.equal(res.statusCode, 403);
   res.resume();

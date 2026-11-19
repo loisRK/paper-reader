@@ -55,7 +55,8 @@ export function needsReextract(source) {
   return sentences.some((s) => !Array.isArray(s?.pdfRects) || !s.pdfRects.length);
 }
 
-export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = {}) {
+// Picks the single directory a paper lives in: own dir if its source.json exists, else the example dir.
+async function choosePaperDir(outputDir, id, examplesDir) {
   let dir = path.join(outputDir, id);
   let example = false;
   let src = await readOptional(path.join(dir, 'source.json'));
@@ -64,6 +65,16 @@ export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = 
     example = true;
     src = await readOptional(path.join(dir, 'source.json'));
   }
+  return { dir, example, src };
+}
+
+export async function resolvePaperDir(outputDir, id, { examplesDir = EXAMPLES_DIR } = {}) {
+  const { dir, src } = await choosePaperDir(outputDir, id, examplesDir);
+  return src.value === undefined ? null : dir;
+}
+
+export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = {}) {
+  const { dir, example, src } = await choosePaperDir(outputDir, id, examplesDir);
   if (src.value === undefined) return null;
   const dig = await readOptional(path.join(dir, 'digest.json'));
   const prog = await readOptional(path.join(outputDir, id, 'progress.json'));

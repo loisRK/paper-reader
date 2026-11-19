@@ -6,7 +6,7 @@ import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
 import { registerPaper } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
-import { EXAMPLES_DIR, isSafeName, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
+import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
 const MAX_BODY = 1024 * 1024;
@@ -93,21 +93,19 @@ async function serveStatic(res, pathname) {
 
 const FIGURE_RE = /^fig-\d+-\d+\.png$/;
 
-async function readFigure(roots, id, name) {
-  for (const root of roots) {
-    if (!root) continue;
-    const figDir = path.resolve(root, id, 'figures');
+async function readFigure(paperDir, name) {
+  if (!paperDir) return null;
+  try {
+    const figDir = await fs.realpath(path.join(paperDir, 'figures'));
+    if (figDir !== path.join(await fs.realpath(paperDir), 'figures')) return null;
     const file = path.join(figDir, name);
-    if (!file.startsWith(figDir + path.sep)) continue;
-    try {
-      const st = await fs.lstat(file);
-      if (!st.isFile()) continue;
-      return await fs.readFile(file);
-    } catch {
-      continue;
-    }
+    if (!(await fs.lstat(file)).isFile()) return null;
+    const real = await fs.realpath(file);
+    if (!real.startsWith(figDir + path.sep)) return null;
+    return await fs.readFile(real);
+  } catch {
+    return null;
   }
-  return null;
 }
 
 export function createServer(cfg, deps = {}) {
@@ -179,7 +177,7 @@ export function createServer(cfg, deps = {}) {
     if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'figures' && method === 'GET') {
       const id = checkName(parts[2], 'id');
       if (!FIGURE_RE.test(parts[4])) throw new HttpError(400, '잘못된 그림 이름입니다.');
-      const data = await readFigure([out, examplesDir === undefined ? EXAMPLES_DIR : examplesDir], id, parts[4]);
+      const data = await readFigure(await resolvePaperDir(out, id, opts), parts[4]);
       if (!data) throw new HttpError(404, '그림 파일을 찾을 수 없습니다.');
       res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Content-Length': data.length });
       return res.end(data);
