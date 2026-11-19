@@ -136,7 +136,7 @@ npm run reader                                # 읽기 앱: http://127.0.0.1:517
 
 ### 예전에 추출한 논문
 
-Zotero 하이라이트에는 PDF 위치(좌표)가 필요합니다. 이전에 추출한 논문은 한 번만 다시 추출하세요. 요약(`digest.json`)의 문장 ID는 그대로입니다.
+Zotero 하이라이트에는 PDF 위치(좌표)가 필요합니다. 이전에 추출한 논문은 한 번만 다시 추출하세요. 그 뒤 `npm run check -- <citekey|itemKey>`로 요약이 여전히 맞는지 확인하세요.
 
 ```bash
 npm run extract -- <citekey|itemKey>
