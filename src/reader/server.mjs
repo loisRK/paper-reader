@@ -129,6 +129,37 @@ async function readFigure(paperDir, name) {
   }
 }
 
+const nfc = (s) => s.normalize('NFC');
+
+// Among bundles of the same PDF keep one: has digest, then Zotero-linked, then oldest source.json, then id.
+async function preferredOf(out, group) {
+  const scored = [];
+  for (const b of group) {
+    let mtime = Infinity;
+    try { mtime = (await fs.stat(path.join(out, b.id, 'source.json'))).mtimeMs; } catch { /* unknown: last */ }
+    scored.push({ b, k: [b.rawDigest !== null ? 0 : 1, b.source.zotero ? 0 : 1, mtime] });
+  }
+  scored.sort((x, y) => x.k[0] - y.k[0] || x.k[1] - y.k[1] || x.k[2] - y.k[2] || x.b.id.localeCompare(y.b.id));
+  return scored[0].b;
+}
+
+// Hides (never deletes) all but one bundle per source.pdf.md5.
+async function dedupeBundles(out, bundles) {
+  const groups = new Map();
+  for (const b of bundles) {
+    const m = b.example ? null : b.source.pdf?.md5;
+    if (typeof m !== 'string' || !m) continue;
+    if (groups.has(m)) groups.get(m).push(b); else groups.set(m, [b]);
+  }
+  const hidden = new Set();
+  for (const g of groups.values()) {
+    if (g.length < 2) continue;
+    const keep = await preferredOf(out, g);
+    for (const b of g) if (b !== keep) hidden.add(b);
+  }
+  return bundles.filter((b) => !hidden.has(b));
+}
+
 export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir, resolveItem = defaultResolveItem, md5File: md5Impl } = deps;
   const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
@@ -139,8 +170,28 @@ export function createServer(cfg, deps = {}) {
   const library = createLibrary({ dataDir, md5: md5Impl });
   // Every Zotero call on the link path is bounded (default 10 s); a timeout counts as "Zotero off".
   const linkDeps = { fetchImpl, ...(deps.zoteroTimeoutMs ? { timeoutMs: deps.zoteroTimeoutMs } : {}) };
+  const opts = { examplesDir };
+  // A folder file whose PDF is already a bundle (same MD5, hashed now, or same realpath) is not extracted again.
+  async function findDuplicate(file) {
+    const md5 = await library.hashNow(file);
+    const real = nfc(file.path);
+    const matches = [];
+    for (const b of await listPaperBundles(out, opts)) {
+      if (b.example) continue;
+      const p = b.source.pdf;
+      let same = typeof p?.md5 === 'string' && p.md5 === md5;
+      if (!same && typeof p?.path === 'string') {
+        same = nfc(p.path) === real;
+        if (!same) { try { same = nfc(await fs.realpath(p.path)) === real; } catch { /* moved */ } }
+      }
+      if (same) matches.push(b);
+    }
+    if (!matches.length) return null;
+    const keep = await preferredOf(out, matches);
+    return { id: keep.id, state: keep.rawDigest !== null ? 'digest' : 'extracted' };
+  }
   const runExtract = createExtractJob({
-    cfg, dataDir, extractFile: deps.extractFile, linkToZotero, linkDeps,
+    cfg, dataDir, extractFile: deps.extractFile, linkToZotero, linkDeps, findDuplicate,
     listFiles: (folders) => library.list(folders),
     ...(deps.linkTimeoutMs ? { linkTimeoutMs: deps.linkTimeoutMs } : {}),
   });
@@ -181,7 +232,6 @@ export function createServer(cfg, deps = {}) {
       }
     })().finally(() => { linking = false; });
   }
-  const opts = { examplesDir };
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
   async function route(req, res) {
@@ -246,7 +296,7 @@ export function createServer(cfg, deps = {}) {
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
       const bundles = await listPaperBundles(out, opts);
       linkInBackground(bundles);
-      const list = bundles.map((b) => {
+      const list = (await dedupeBundles(out, bundles)).map((b) => {
         const { digest } = validated(b);
         const cards = digest?.cards ?? [];
         const ids = new Set(cards.map((c) => c.id));

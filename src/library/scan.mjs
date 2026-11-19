@@ -160,7 +160,7 @@ export function createLibrary({ dataDir, md5 = md5File, persistMs = 1000 } = {})
         }
         files.push({
           id: folderPaperId(rootReal, rel, path.basename(full)),
-          path: real, root: rootReal, rel, size: st.size, mtimeMs: st.mtimeMs, md5: hash,
+          path: real, root: rootReal, folder, rel, size: st.size, mtimeMs: st.mtimeMs, md5: hash,
         });
       }
     }
@@ -174,12 +174,27 @@ export function createLibrary({ dataDir, md5 = md5File, persistMs = 1000 } = {})
     return { files, problems, hashing: { done, total: files.length } };
   }
 
+  // Hashes one listed file now (cache hit if still fresh) and stores it in the cache. Throws if unreadable.
+  async function hashNow(file) {
+    const cache = await loadCache();
+    const st = await fs.stat(file.path);
+    const c = cache[file.path];
+    if (fresh(c, st)) return c.md5;
+    const hash = await md5(file.path);
+    cache[file.path] = { size: st.size, mtimeMs: st.mtimeMs, md5: hash, folder: file.folder ?? c?.folder ?? null };
+    queue.delete(file.path);
+    failed.delete(file.path);
+    dirty = true;
+    await persist(true);
+    return hash;
+  }
+
   // Resolves when the queue is empty and the cache is written.
   async function idle() {
     while (worker) await worker;
   }
 
-  return { list, idle };
+  return { list, idle, hashNow };
 }
 
 // Blocking variant (CLI/tests): lists, waits for every MD5, then lists again from the cache.

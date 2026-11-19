@@ -5,6 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import http from 'node:http';
 import { createServer } from '../src/reader/server.mjs';
+import { folderPaperId } from '../src/library/scan.mjs';
 
 let dir, server, base;
 const calls = [];
@@ -771,7 +772,7 @@ test('agents API: list with selection, default first available, PUT validation a
 });
 
 // ---- digest job API ----
-async function digestServer(t, { runs = [], agents, extractFile } = {}) {
+async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf } = {}) {
   const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-dj-')));
   const root = path.join(tmp, 'pdfs');
   const dataDir = path.join(tmp, 'data');
@@ -783,7 +784,7 @@ async function digestServer(t, { runs = [], agents, extractFile } = {}) {
   await fs.mkdir(path.join(examples, 'ex1'), { recursive: true });
   await fs.writeFile(path.join(root, 'a.pdf'), Buffer.from('%PDF-1.1\n%%EOF\n'));
   await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [root] }));
-  const src = { id: 'd1', meta: { title: 'D' }, pages: [{ page: 1 }], sentences: { 'p1-s1': { text: 'a', page: 1 } } };
+  const src = { id: 'd1', meta: { title: 'D' }, pages: [{ page: 1 }], sentences: { 'p1-s1': { text: 'a', page: 1 } }, ...(d1Pdf ? { pdf: d1Pdf } : {}) };
   await fs.writeFile(path.join(out, 'd1', 'source.json'), JSON.stringify(src));
   await fs.writeFile(path.join(examples, 'ex1', 'source.json'), JSON.stringify({ ...src, id: 'ex1' }));
   const calls = [];
@@ -796,7 +797,7 @@ async function digestServer(t, { runs = [], agents, extractFile } = {}) {
   };
   const detectAgents = async () => agents ?? [{ id: 'codex', name: 'Codex', available: true }, { id: 'claude', name: 'Claude Code', available: false }];
   const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' }, researchContextFile: null },
-    { examplesDir: examples, detectAgents, runAgent, extractFile });
+    { examplesDir: examples, detectAgents, runAgent, extractFile, ...(md5File ? { md5File } : {}) });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
   t.after(async () => { s.close(); await s.digestJobs?.shutdown(); await fs.rm(tmp, { recursive: true, force: true }); });
   const b = `http://127.0.0.1:${s.address().port}`;
@@ -810,7 +811,7 @@ async function digestServer(t, { runs = [], agents, extractFile } = {}) {
     }
     throw new Error('job did not settle');
   };
-  return { s, b, out, jpost, job, settle, calls };
+  return { s, b, out, root, jpost, job, settle, calls };
 }
 const goodDigest = (id) => ({ version: 1, paperId: id, takeaway: { text: 't', evidence: ['p1-s1'], why: 'w' }, cards: [], glossary: [] });
 
@@ -882,4 +883,93 @@ test('digest API: folder PDF is extracted first and shares the extraction busy f
   const done = await ctx.settle(encodeURIComponent(pdfId));
   assert.equal(done.state, 'done', done.message);
   assert.equal(JSON.parse(await fs.readFile(path.join(ctx.out, pdfId, 'digest.json'), 'utf8')).paperId, pdfId);
+});
+
+// ---- duplicate PDFs (same MD5) ----
+test('paper list shows one bundle per PDF md5 (digest > Zotero > oldest) and hides matching folder files', async (t) => {
+  const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-dup-')));
+  t.after(() => fs.rm(tmp, { recursive: true, force: true }));
+  const out = path.join(tmp, 'out');
+  const root = path.join(tmp, 'pdfs');
+  const dataDir = path.join(tmp, 'data');
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(path.join(root, '2501.06706v1.pdf'), Buffer.from('%PDF-1.1\n%%EOF\n'));
+  await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [root] }));
+  const mk = async (id, { md5, zotero, digest, mtime }) => {
+    await fs.mkdir(path.join(out, id), { recursive: true });
+    const f = path.join(out, id, 'source.json');
+    await fs.writeFile(f, JSON.stringify({ id, meta: { title: id }, pages: [], sentences: {}, pdf: { md5 }, ...(zotero ? { zotero: { itemKey: 'K', attachmentKey: 'A' } } : {}) }));
+    if (digest) await fs.writeFile(path.join(out, id, 'digest.json'), JSON.stringify({ version: 1, paperId: id, cards: [] }));
+    if (mtime) await fs.utimes(f, mtime, mtime);
+  };
+  await mk('a1', { md5: 'M1', zotero: true });
+  await mk('a2', { md5: 'M1', digest: true });
+  await mk('b2', { md5: 'M2', mtime: new Date('2024-01-01') });
+  await mk('b1', { md5: 'M2', mtime: new Date('2020-01-01') });
+  await mk('c1', { md5: 'M3', zotero: true });
+  await mk('c2', { md5: 'M3' });
+  await mk('solo', { md5: 'M4' });
+  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } },
+    { examplesDir: path.join(tmp, 'none'), md5File: async () => 'M1', linkCooldownMs: 3_600_000 });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(() => s.close());
+  const list = async () => (await (await fetch(`http://127.0.0.1:${s.address().port}/api/papers`)).json());
+  let body = await list();
+  for (let i = 0; i < 200 && (body.hashing?.done ?? 0) < 1; i += 1) { await new Promise((r) => setTimeout(r, 5)); body = await list(); }
+  assert.deepEqual(body.papers.map((p) => p.id).sort(), ['a2', 'b1', 'c1', 'solo']);
+  assert.ok(!body.papers.some((p) => p.state === 'pdf'));
+  for (const id of ['a1', 'a2', 'b1', 'b2', 'c1', 'c2']) assert.ok((await fs.stat(path.join(out, id, 'source.json'))).isFile());
+});
+
+test('extract route: identical file (same md5, hashed now) is merged into the existing bundle, no new dir', async (t) => {
+  let calls = 0;
+  const extractFile = async () => { calls += 1; return {}; };
+  let hashes = 0;
+  const ctx = await extractServer(t, { extractFile, md5File: async () => { hashes += 1; return 'SAME'; } });
+  await fs.mkdir(path.join(ctx.out, 'zot1'));
+  await fs.writeFile(path.join(ctx.out, 'zot1', 'source.json'), JSON.stringify({ id: 'zot1', pages: [], sentences: {}, pdf: { md5: 'SAME', path: '/elsewhere/a.pdf' }, zotero: { itemKey: 'K' } }));
+  const root = path.dirname(ctx.pdfFile);
+  const id = folderPaperId(root, 'one paper.pdf', 'one paper.pdf');
+  const res = await ctx.post({ id });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { id: 'zot1', state: 'extracted', merged: true });
+  assert.equal(calls, 0);
+  assert.ok(hashes >= 1);
+  assert.deepEqual(await fs.readdir(ctx.out), ['zot1']);
+});
+
+test('extract route: same realpath (NFD-stored path) is merged even with a different md5; different file extracts', async (t) => {
+  let calls = 0;
+  const extractFile = async ({ cfg, id }) => { calls += 1; await fs.mkdir(path.join(cfg.outputDir, id), { recursive: true }); return {}; };
+  const ctx = await extractServer(t, { extractFile, md5File: async () => 'NEW' });
+  const id = folderPaperId(path.dirname(ctx.pdfFile), 'one paper.pdf', 'one paper.pdf');
+  await fs.mkdir(path.join(ctx.out, 'old1'));
+  await fs.writeFile(path.join(ctx.out, 'old1', 'source.json'), JSON.stringify({ id: 'old1', pages: [], sentences: {}, pdf: { md5: 'OLD', path: ctx.pdfFile.normalize('NFD') } }));
+  await fs.writeFile(path.join(ctx.out, 'old1', 'digest.json'), '{}');
+  assert.deepEqual(await (await ctx.post({ id })).json(), { id: 'old1', state: 'digest', merged: true });
+  assert.equal(calls, 0);
+  await fs.rm(path.join(ctx.out, 'old1'), { recursive: true });
+  assert.equal((await ctx.post({ id })).status, 200);
+  assert.equal(calls, 1);
+});
+
+test('digest API: folder PDF identical to an existing paper runs on that paper, no extraction', async (t) => {
+  let extracted = 0;
+  const ctx = await digestServer(t, {
+    md5File: async () => 'DUP',
+    d1Pdf: { md5: 'DUP' },
+    extractFile: async () => { extracted += 1; return {}; },
+    runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest('d1'))); return { code: 0 }; }],
+  });
+  const id = folderPaperId(ctx.root, 'a.pdf', 'a.pdf');
+  const r = await ctx.jpost(`/api/papers/${id}/digest`);
+  assert.equal(r.status, 202);
+  const done = await ctx.settle(id);
+  assert.equal(done.state, 'done', done.message);
+  assert.equal(done.paperId, 'd1');
+  assert.equal(extracted, 0);
+  assert.equal((await ctx.job('d1')).state, 'done');
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(ctx.out, 'd1', 'digest.json'), 'utf8')), goodDigest('d1'));
+  assert.deepEqual((await fs.readdir(ctx.out)).sort(), ['d1']);
 });

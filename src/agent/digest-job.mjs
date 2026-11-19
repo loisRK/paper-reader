@@ -105,7 +105,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
 
   async function run(ctx, needsExtract) {
     const { job } = ctx;
-    const paperDir = path.join(out, job.paperId);
+    let paperDir = path.join(out, job.paperId);
     let workdir = null;
     // The terminal state is published only in `finally`, together with finishedAt, after cleanup.
     let outcome = null;
@@ -114,7 +114,15 @@ export function createDigestJobs({ cfg, deps = {} }) {
       if (needsExtract) {
         addLog(job, 'PDF에서 본문을 추출하는 중');
         try {
-          await extract(job.paperId);
+          const r = await extract(job.paperId);
+          if (r?.merged && typeof r.id === 'string' && r.id !== job.paperId) {
+            // Same PDF already extracted under another id: digest that paper instead of a duplicate.
+            addLog(job, `이미 추출된 같은 논문(${r.id})으로 진행합니다.`);
+            job.paperId = r.id;
+            ctx.ids.add(r.id);
+            last.set(r.id, job);
+            paperDir = path.join(out, r.id);
+          }
         } catch (err) {
           if (ctx.cancelled) return;
           return fail(firstLine(err) || '추출에 실패했습니다.');
@@ -220,7 +228,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
         log: [],
         startedAt: new Date().toISOString(),
       };
-      const ctx = { job, cancelled: false, handle: null, settled: null };
+      const ctx = { job, ids: new Set([paperId]), cancelled: false, handle: null, settled: null };
       current = ctx;
       last.set(paperId, job);
       ctx.settled = run(ctx, needsExtract);
@@ -233,7 +241,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
 
   function cancel(paperId) {
     const ctx = current;
-    if (!ctx || ctx === 'starting' || ctx.job.paperId !== paperId || ctx.cancelled) return false;
+    if (!ctx || ctx === 'starting' || !ctx.ids.has(paperId) || ctx.cancelled) return false;
     ctx.cancelled = true;
     ctx.handle?.cancel();
     return true;

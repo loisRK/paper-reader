@@ -27,6 +27,8 @@ export function createExtractJob({
   linkTimeoutMs = LINK_TIMEOUT_MS,
   // (folders) => { files }. The server passes its non-blocking library list (no MD5 wait).
   listFiles = (folders) => scanFolders(folders, { dataDir, md5 }),
+  // (file) => Promise<{ id, state } | null>: an existing bundle of the same PDF (MD5 or realpath).
+  findDuplicate = async () => null,
 }) {
   let busy = false;
   return async function runExtract(id) {
@@ -37,6 +39,10 @@ export function createExtractJob({
       const { files } = folders.length ? await listFiles(folders) : { files: [] };
       const found = files.find((f) => f.id === id);
       if (!found) throw new JobError(404, NOT_FOUND_MESSAGE);
+      // Same PDF already extracted (e.g. a copy of a Zotero paper): never create a duplicate bundle.
+      let dup = null;
+      try { dup = await findDuplicate(found); } catch { /* unreadable: extraction reports it */ }
+      if (dup) return { id: dup.id, state: dup.state, merged: true };
       try {
         await extractFile({ cfg, file: found.path, id });
       } catch (err) {
