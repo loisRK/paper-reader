@@ -357,3 +357,15 @@ def test_pdf_rects_asymmetric_cropbox_all_rotations(tmp_path, rotation):
     r = first_sentence(src)["pdfRects"][0]
     assert r[0] == pytest.approx(72, abs=2)
     assert 792 - 100 - 2 <= r[3] <= 792 - 100 + 12
+
+
+def test_pdf_rects_rotated_page_low_text_not_clipped(tmp_path):
+    # y=700 unrotated is beyond the rotated page.rect height (612); must not be clipped/dropped
+    base = extract(make_rotated_pdf(tmp_path, rotation=0, text_at=(72, 700)))
+    rot = extract(make_rotated_pdf(tmp_path, rotation=90, text_at=(72, 700)))
+    def hello(src):
+        return next(x for x in src["sentences"].values() if x["text"] == "Hello world.")["pdfRects"][0]
+
+    a, b = hello(base), hello(rot)
+    assert b[2] > b[0]
+    assert b == pytest.approx(a, abs=0.2)

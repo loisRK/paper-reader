@@ -255,6 +255,8 @@ def _extract(doc):
     total_chars = 0
     for pno, page in enumerate(doc, start=1):
         w, h = page.rect.width, page.rect.height
+        # text bboxes live in the unrotated page space; page.rect is swapped on 90/270 pages
+        uw, uh = (h, w) if page.rotation in (90, 270) else (w, h)
         pages.append({"page": pno, "width": _num(w), "height": _num(h), "rotation": page.rotation})
         raw = page.get_text("rawdict", flags=TEXT_FLAGS)
         items = []
@@ -271,7 +273,7 @@ def _extract(doc):
             first_line = text[:first_len].strip()
             items.append({"bbox": b["bbox"], "text": text, "cmap": cmap, "size": size,
                           "first_line": first_line})
-        page_blocks.append((pno, w, h, _to_pdf_matrix(page), _order_blocks(items, w)))
+        page_blocks.append((pno, uw, uh, _to_pdf_matrix(page), _order_blocks(items, uw)))
 
     if not pages or total_chars / len(pages) < MIN_CHARS_PER_PAGE:
         raise ScannedPdfError()
