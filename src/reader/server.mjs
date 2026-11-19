@@ -4,7 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
-import { registerPaper } from '../zotero/local.mjs';
+import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
@@ -91,6 +91,15 @@ async function serveStatic(res, pathname) {
   res.end(data);
 }
 
+async function isPdfFile(file) {
+  if (typeof file !== 'string' || !path.isAbsolute(file) || path.extname(file).toLowerCase() !== '.pdf') return false;
+  try {
+    return (await fs.stat(file)).isFile();
+  } catch {
+    return false;
+  }
+}
+
 const FIGURE_RE = /^fig-\d+-\d+\.png$/;
 
 async function readFigure(paperDir, name) {
@@ -109,7 +118,7 @@ async function readFigure(paperDir, name) {
 }
 
 export function createServer(cfg, deps = {}) {
-  const { fetchImpl, examplesDir } = deps;
+  const { fetchImpl, examplesDir, resolveItem = defaultResolveItem } = deps;
   const out = cfg.outputDir;
   const opts = { examplesDir };
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
@@ -155,10 +164,13 @@ export function createServer(cfg, deps = {}) {
       if (!b) throw new HttpError(404, '논문을 찾을 수 없습니다.');
       const { digest, problems } = validated(b);
       const z = b.source.zotero ?? {};
+      // links.pdf never calls Zotero: recorded path first, else assume a lookup by itemKey can work.
+      const hasPdf = !b.example && ((await isPdfFile(b.source.pdf?.path)) || Boolean(z.itemKey));
       return sendJson(res, 200, {
         source: b.source, digest, problems, progress: b.progress, needsReextract: b.needsReextract, example: b.example === true,
         links: {
           zoteroPdf: z.attachmentKey ? `zotero://open-pdf/library/items/${z.attachmentKey}` : null,
+          pdf: hasPdf,
           zoteroItem: z.itemKey ? `zotero://select/library/items/${z.itemKey}` : null,
         },
       });
@@ -180,6 +192,26 @@ export function createServer(cfg, deps = {}) {
       const data = await readFigure(await resolvePaperDir(out, id, opts), parts[4]);
       if (!data) throw new HttpError(404, '그림 파일을 찾을 수 없습니다.');
       res.writeHead(200, { 'Content-Type': 'image/png', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Content-Length': data.length });
+      return res.end(data);
+    }
+
+    if (parts[1] === 'papers' && parts.length === 4 && parts[3] === 'pdf' && method === 'GET') {
+      const id = checkName(parts[2], 'id');
+      const b = await readPaper(out, id, opts);
+      if (!b) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+      let file = !b.example && (await isPdfFile(b.source.pdf?.path)) ? b.source.pdf.path : null;
+      if (!file && !b.example && b.source.zotero?.itemKey) {
+        try {
+          const item = await resolveItem(b.source.zotero.itemKey, cfg, { fetchImpl });
+          if (await isPdfFile(item?.pdfPath)) file = item.pdfPath;
+        } catch { /* Zotero not running or item gone: treated as not found */ }
+      }
+      let data = null;
+      if (file) {
+        try { data = await fs.readFile(file); } catch { data = null; }
+      }
+      if (!data) throw new HttpError(404, 'PDF 파일을 찾을 수 없습니다. 파일이 옮겨졌다면 다시 추출하세요.');
+      res.writeHead(200, { 'Content-Type': 'application/pdf', 'Cache-Control': 'no-cache', 'X-Content-Type-Options': 'nosniff', 'Content-Length': data.length });
       return res.end(data);
     }
 

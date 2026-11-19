@@ -95,7 +95,7 @@ test('server lists examples with example flag, null Zotero links, and saves thei
     const list = await (await fetch(`${base}/api/papers`)).json();
     assert.deepEqual(list.map((p) => [p.id, p.example]), [['ex1', true], ['mine', false]]);
     const body = await (await fetch(`${base}/api/papers/ex1`)).json();
-    assert.deepEqual(body.links, { zoteroPdf: null, zoteroItem: null });
+    assert.deepEqual(body.links, { zoteroPdf: null, pdf: false, zoteroItem: null });
     const res = await fetch(`${base}/api/papers/ex1/progress`, {
       method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ read: [], mode: '3min', focus: false }),
     });

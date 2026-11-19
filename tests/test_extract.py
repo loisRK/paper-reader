@@ -52,7 +52,7 @@ def test_ids_are_page_scoped_and_ordered(tmp_path):
     assert result["sentences"]["p1-s2"]["text"] == "Second sentence here."
     assert result["sentences"]["p2-s1"]["text"] == "Third sentence here."
     assert result["sentences"]["p2-s1"]["page"] == 2
-    assert result["extractorVersion"] == 3
+    assert result["extractorVersion"] == 4
     assert result["pages"] == [
         {"page": 1, "width": 612, "height": 792, "rotation": 0},
         {"page": 2, "width": 612, "height": 792, "rotation": 0},
@@ -307,7 +307,7 @@ def test_caption_label_variants(tmp_path):
 def test_records_pymupdf_version(tmp_path):
     pdf = make_pdf(tmp_path / "ver.pdf", [[((72, 72, 540, 120), FILLER, 10)]])
     result = extract(pdf)
-    assert result["extractorVersion"] == 3
+    assert result["extractorVersion"] == 4
     assert result["pymupdfVersion"] == pymupdf.__version__
 
 
@@ -513,7 +513,7 @@ def test_sentence_ids_unchanged_by_figure_detection(tmp_path):
     strip = [{k: v for k, v in b.items() if k != "inFigure"} for b in on["blocks"]]
     assert strip == off["blocks"]
     assert [{k: f[k] for k in ("label", "page", "captionSentenceId")} for f in on["figures"]] == off["figures"]
-    assert on["extractorVersion"] == 3
+    assert on["extractorVersion"] == 4
 
 
 def test_narrow_caption_under_full_width_figure_keeps_full_width(tmp_path):
@@ -816,3 +816,12 @@ def test_clear_stale_images_failure_only_warns(tmp_path, monkeypatch, capsys):
     result = extract(make_figure_pdf(tmp_path / "w.pdf"), figures_dir=str(figdir))
     assert result["sentences"]
     assert "정리하지 못했습니다" in capsys.readouterr().err
+
+
+def test_records_pdf_path_and_md5(tmp_path):
+    import hashlib
+    pdf = make_pdf(tmp_path / "rec.pdf", [[((72, 72, 540, 120), FILLER, 10)]])
+    result = extract(pdf)
+    assert result["pdf"]["path"] == str(Path(pdf).resolve())
+    assert Path(result["pdf"]["path"]).is_absolute()
+    assert result["pdf"]["md5"] == hashlib.md5(Path(pdf).read_bytes()).hexdigest()

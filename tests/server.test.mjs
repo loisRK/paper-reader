@@ -157,7 +157,7 @@ test('rejects foreign Host header with 403', async () => {
 
 test('missing zotero keys give null links', async () => {
   const body = await (await fetch(`${base}/api/papers/p3`)).json();
-  assert.deepEqual(body.links, { zoteroPdf: null, zoteroItem: null });
+  assert.deepEqual(body.links, { zoteroPdf: null, pdf: false, zoteroItem: null });
 });
 
 test('Korean search slug round-trips: runSearch file → list → read → register', async () => {
@@ -463,4 +463,97 @@ test('figure endpoint rejects bad Host', async () => {
   });
   assert.equal(res.statusCode, 403);
   res.resume();
+});
+
+// ---- PDF route ----
+async function pdfServer(t, { deps = {}, papers }) {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-pdf-'));
+  const ex = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-pdf-ex-'));
+  for (const [id, src] of Object.entries(papers(d))) {
+    await fs.mkdir(path.join(d, id));
+    await fs.writeFile(path.join(d, id, 'source.json'), JSON.stringify({ id, meta: { title: id }, pages: [], sentences: {}, ...src }));
+  }
+  await fs.mkdir(path.join(ex, 'exp'));
+  await fs.writeFile(path.join(ex, 'exp', 'source.json'), JSON.stringify({ id: 'exp', pdf: { path: path.join(d, 'a.pdf'), md5: 'x' }, meta: {}, pages: [], sentences: {} }));
+  const s = createServer({ outputDir: d, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: ex, ...deps });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await fs.rm(d, { recursive: true, force: true }); await fs.rm(ex, { recursive: true, force: true }); });
+  return { dir: d, base: `http://127.0.0.1:${s.address().port}` };
+}
+
+const PDF_BYTES = Buffer.from('%PDF-1.4\n%fake\n');
+
+test('pdf route serves the recorded file byte for byte', async (t) => {
+  let dirRef;
+  const { dir: d, base: b } = await pdfServer(t, { papers: (d) => { dirRef = d; return { a: { pdf: { path: path.join(d, 'a.pdf'), md5: 'x' } } }; } });
+  await fs.writeFile(path.join(dirRef, 'a.pdf'), PDF_BYTES);
+  const res = await fetch(`${b}/api/papers/a/pdf`);
+  assert.equal(res.status, 200);
+  assert.equal(res.headers.get('content-type'), 'application/pdf');
+  assert.equal(res.headers.get('cache-control'), 'no-cache');
+  assert.equal(res.headers.get('content-length'), String(PDF_BYTES.length));
+  assert.deepEqual(Buffer.from(await res.arrayBuffer()), PDF_BYTES);
+  const body = await (await fetch(`${b}/api/papers/a`)).json();
+  assert.equal(body.links.pdf, true);
+  assert.ok(d);
+});
+
+test('pdf route rejects non-pdf extension, missing record, directories, bad host', async (t) => {
+  let dirRef;
+  const { base: b } = await pdfServer(t, {
+    papers: (d) => { dirRef = d; return {
+      txt: { pdf: { path: path.join(d, 'x.txt'), md5: 'x' } },
+      none: {},
+      gone: { pdf: { path: path.join(d, 'gone.pdf'), md5: 'x' } },
+      dirp: { pdf: { path: path.join(d, 'dir.pdf'), md5: 'x' } },
+      upper: { pdf: { path: path.join(d, 'U.PDF'), md5: 'x' } },
+    }; },
+  });
+  await fs.writeFile(path.join(dirRef, 'x.txt'), PDF_BYTES);
+  await fs.mkdir(path.join(dirRef, 'dir.pdf'));
+  await fs.writeFile(path.join(dirRef, 'U.PDF'), PDF_BYTES);
+  for (const id of ['txt', 'none', 'gone', 'dirp']) {
+    const res = await fetch(`${b}/api/papers/${id}/pdf`);
+    assert.equal(res.status, 404, id);
+    assert.match((await res.json()).error, /PDF 파일을 찾을 수 없습니다/);
+  }
+  assert.equal((await fetch(`${b}/api/papers/upper/pdf`)).status, 200);
+  assert.equal((await fetch(`${b}/api/papers/none`).then((r) => r.json())).links.pdf, false);
+  const bad = await new Promise((resolve) => {
+    http.get({ host: '127.0.0.1', port: new URL(b).port, path: '/api/papers/upper/pdf', headers: { host: 'evil.example' } }, (r) => { r.resume(); resolve(r.statusCode); });
+  });
+  assert.equal(bad, 403);
+});
+
+test('pdf route falls back to injected resolveItem via itemKey; Zotero errors give 404', async (t) => {
+  let dirRef;
+  const calls2 = [];
+  const resolveItem = async (key) => {
+    calls2.push(key);
+    if (key === 'DOWN0001') throw new Error('Zotero가 실행 중이 아닙니다');
+    return { pdfPath: path.join(dirRef, 'z.pdf') };
+  };
+  const { base: b } = await pdfServer(t, {
+    deps: { resolveItem },
+    papers: (d) => { dirRef = d; return {
+      viaz: { zotero: { itemKey: 'ITEM0001', attachmentKey: 'A' } },
+      stale: { zotero: { itemKey: 'ITEM0001' }, pdf: { path: path.join(d, 'moved.pdf'), md5: 'x' } },
+      down: { zotero: { itemKey: 'DOWN0001' } },
+    }; },
+  });
+  await fs.writeFile(path.join(dirRef, 'z.pdf'), PDF_BYTES);
+  for (const id of ['viaz', 'stale']) {
+    const res = await fetch(`${b}/api/papers/${id}/pdf`);
+    assert.equal(res.status, 200, id);
+    assert.deepEqual(Buffer.from(await res.arrayBuffer()), PDF_BYTES);
+  }
+  assert.equal((await fetch(`${b}/api/papers/viaz`).then((r) => r.json())).links.pdf, true);
+  assert.equal(calls2.length, 2);
+  assert.equal((await fetch(`${b}/api/papers/down/pdf`)).status, 404);
+});
+
+test('example papers report links.pdf false and never serve a PDF', async (t) => {
+  const { base: b } = await pdfServer(t, { papers: () => ({}) });
+  assert.equal((await fetch(`${b}/api/papers/exp`).then((r) => r.json())).links.pdf, false);
+  assert.equal((await fetch(`${b}/api/papers/exp/pdf`)).status, 404);
 });

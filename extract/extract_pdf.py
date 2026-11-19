@@ -4,6 +4,7 @@ Usage: python extract/extract_pdf.py <pdf> <out.json> [--figures-dir <dir>]
 With --figures-dir, figure/table regions are saved there as fig-<page>-<n>.png.
 No stdout. On failure: Korean message on stderr, exit code 2.
 """
+import hashlib
 import json
 import os
 import re
@@ -16,7 +17,7 @@ import pymupdf
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import figure_regions  # noqa: E402
 
-EXTRACTOR_VERSION = 3
+EXTRACTOR_VERSION = 4
 SCANNED_MESSAGE = "텍스트를 추출할 수 없습니다(스캔 PDF로 보입니다). OCR된 PDF로 바꿔주세요."
 MIN_CHARS_PER_PAGE = 50
 
@@ -47,6 +48,14 @@ TEXT_FLAGS = pymupdf.TEXT_PRESERVE_WHITESPACE | pymupdf.TEXT_MEDIABOX_CLIP
 class ScannedPdfError(Exception):
     def __init__(self, message=SCANNED_MESSAGE):
         super().__init__(message)
+
+
+def _md5_file(path):
+    h = hashlib.md5()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
 
 
 def _r1(v):
@@ -254,7 +263,10 @@ def extract(pdf_path, figures_dir=None, detect_figures=True):
     detect_figures=False leaves figures as label/page/captionSentenceId only (no bbox/image/blockIds)."""
     doc = pymupdf.open(pdf_path)
     try:
-        return _extract(doc, figures_dir, detect_figures)
+        result = _extract(doc, figures_dir, detect_figures)
+        pdf = {"path": os.path.abspath(pdf_path), "md5": _md5_file(pdf_path)}
+        head = {k: result[k] for k in ("extractorVersion", "pymupdfVersion")}
+        return {**head, "pdf": pdf, **{k: v for k, v in result.items() if k not in head}}
     finally:
         doc.close()
 
