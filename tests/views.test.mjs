@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -125,6 +125,12 @@ test('conflictView: Zotero-deleted highlight offers 다시 보내기 / 삭제; o
     text: 'Zotero에서 바뀌어 삭제하지 않았습니다.', actions: ['dismiss'],
   });
   assert.equal(conflictView(null), null);
+});
+
+test('failedText: count of memos Zotero refused, empty when none', () => {
+  assert.equal(failedText(2), '보내지 못한 메모 2개');
+  assert.equal(failedText(0), '');
+  assert.equal(failedText(undefined), '');
 });
 
 test('NOTE_COLORS matches ZOTERO_COLORS (source of truth)', () => {

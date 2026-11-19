@@ -51,7 +51,7 @@ export function sentenceMarks(notes) {
 
 export const emptyNotes = () => ({
   highlights: [], cardMemos: {}, zoteroAnnotations: [], note: null,
-  status: 'readonly', pending: 0, message: null, needsReextract: false,
+  status: 'readonly', pending: 0, message: null, failed: 0, failedMessage: null, needsReextract: false,
 });
 
 // Wraps an async fn so a second call while one is running is ignored (returns undefined).
@@ -74,6 +74,9 @@ export function statusText(status, pending) {
     default: return READONLY_TEXT;
   }
 }
+
+// Ops Zotero refused permanently (kept on this computer, retried after an edit).
+export const failedText = (n) => (n > 0 ? `보내지 못한 메모 ${n}개` : '');
 
 // What the popover shows for a highlight conflict, and which buttons it offers.
 export function conflictView(conflict) {
@@ -126,6 +129,7 @@ export function setupNotes({ id, source, panel, actions, onNotes }) {
     statusNode.className = `notes-status st-${n.status}`;
     statusNode.replaceChildren(
       el('span', { class: 'st-badge', text: statusText(n.status, n.pending) }),
+      n.failed > 0 ? el('span', { class: 'st-badge st-failed', text: failedText(n.failed), title: n.failedMessage ?? '' }) : null,
       needsAuth ? el('button', {
         type: 'button', class: 'btn btn-quiet', text: 'Zotero 쓰기 허용', 'aria-label': 'Zotero 쓰기 허용 요청',
         onclick: async () => {

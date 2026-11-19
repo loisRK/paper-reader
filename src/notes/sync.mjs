@@ -40,6 +40,10 @@ const versionOf = (item) => {
   return Number.isFinite(v) ? v : null;
 };
 const is412 = (err) => err?.code === 'http' && err.status === 412;
+// Zotero will never accept this op as it is: createItems failed[] entries and 4xx other than
+// 408/429. 412 is a version conflict, re-read on the next attempt, so it is not permanent.
+const isPermanent = (err) => err?.permanent === true
+  || (err?.code === 'http' && err.status >= 400 && err.status < 500 && ![408, 412, 429].includes(err.status));
 
 function pageOf(annotationPosition) {
   try {
@@ -119,7 +123,7 @@ function makeSync(ctx) {
     const key = keyOf(ok) ?? res.success?.[0] ?? res.success?.['0'];
     if (!key) {
       const f = res.failed?.[0] ?? res.failed?.['0'];
-      throw new Error(`Zotero 항목 생성 실패${f?.message ? `: ${f.message}` : ''}`);
+      throw Object.assign(new Error(`Zotero 항목 생성 실패${f?.message ? `: ${f.message}` : ''}`), { permanent: true });
     }
     ctx.wrote = true;
     // The key must be saved even if the version lookup fails, or the next sync duplicates it.
@@ -235,11 +239,14 @@ function makeSync(ctx) {
 
   const handlers = { 'upsert-highlight': upsertHighlight, 'delete-highlight': deleteHighlight, 'upsert-note': upsertNote };
 
-  // Front to back; the first failure stops the flush and stays queued. Skipped ops stay in place.
+  // Front to back; the first transient failure stops the flush and stays queued. Skipped ops
+  // (held conflicts, permanently failed ops marked { error, failedAt }) stay in place.
+  // A failed op is retried only after enqueue() clears its mark (user edit) or a server change.
   async function flush() {
     let i = 0;
     while (i < pending.ops.length) {
       const op = pending.ops[i];
+      if (op.error) { i++; continue; }
       const handler = handlers[op.op];
       let result;
       try {
@@ -250,6 +257,13 @@ function makeSync(ctx) {
         }
         const status = STATUS_BY_CODE[err?.code];
         if (status) return { status, message: err.message ?? null };
+        if (isPermanent(err)) {
+          op.error = `Zotero가 받지 않았습니다: ${err?.message ?? err}`;
+          op.failedAt = now();
+          await ctx.save();
+          i++;
+          continue;
+        }
         return { status: 'connected', message: `Zotero 동기화 실패: ${err?.message ?? err}` };
       }
       if (result === SKIP) i++;
@@ -316,7 +330,10 @@ function makeSync(ctx) {
 async function runSync(outputDir, id, { source, cards, writer, serverInfo }) {
   const notes = await readNotes(outputDir, id);
   const pending = await readPending(outputDir, id);
-  const done = (status, message = null) => ({ status, pending: pending.ops.length, message });
+  const done = (status, message = null) => {
+    const failed = pending.ops.filter((o) => o.error);
+    return { status, pending: pending.ops.length, message, failed: failed.length, failedMessage: failed[0]?.error ?? null };
+  };
 
   if (!serverInfo?.running) return done('offline', serverInfo?.message ?? null);
   const { itemKey, attachmentKey } = source?.zotero ?? {};

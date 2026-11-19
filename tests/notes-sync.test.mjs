@@ -46,6 +46,7 @@ function fakeWriter(prefix = 'NEW') {
     calls,
     fail: {}, // method -> ZoteroWriteError to throw
     noVersionOnCreate: false,
+    rejectCreate: null, // (data) => message: reported in createItems' failed{} (Zotero rejected it)
     pageSize: Infinity,
     bump: () => ++lib,
     put(key, data, version = ++lib) {
@@ -66,6 +67,8 @@ function fakeWriter(prefix = 'NEW') {
       w.check('createItems');
       const out = { success: {}, successful: {}, failed: {} };
       list.forEach((data, i) => {
+        const why = w.rejectCreate?.(data);
+        if (why) { out.failed[i] = { key: null, code: 400, message: why }; return; }
         const key = `${prefix}${String(++n).padStart(5, '0')}`;
         const it = w.put(key, data);
         out.success[i] = key;
@@ -159,7 +162,7 @@ test('flush creates annotation, stores zoteroKey/version, clears pending', async
   const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1', 'p1-s2'], color: '#ff6666', comment: 'c' });
   const w = fakeWriter();
   const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
-  assert.deepEqual(r, { status: 'connected', pending: 0, message: null });
+  assert.deepEqual(r, { status: 'connected', pending: 0, message: null, failed: 0, failedMessage: null });
   const notes = await readNotes(dir, ID);
   const local = notes.highlights.find((x) => x.id === h.id);
   assert.ok(local.zoteroKey);
@@ -223,6 +226,73 @@ for (const [code, status] of [['denied', 'denied'], ['needs-auth', 'needs-auth']
     assert.equal(notes.cardMemos.c1, 'card memo');
     assert.equal(w.calls.filter((c) => c === 'createItems').length, 1, 'stops at first failure');
     if (code === 'needs-auth') assert.ok(w.calls.includes('listChildren'), 'pull still runs');
+  });
+}
+
+test('permanent failure (createItems failed[]) marks the op and skips it; later ops still flush', async () => {
+  const dir = await tmp();
+  const bad = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'rejected' });
+  const good = await addHighlight(dir, ID, { sentenceIds: ['p1-s2'], color: '#ffd400', comment: 'ok' });
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w = fakeWriter();
+  w.rejectCreate = (data) => (data.annotationComment === 'rejected' ? 'Parent item not found' : null);
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r.status, 'connected');
+  assert.equal(r.failed, 1);
+  assert.match(r.failedMessage, /Parent item not found/);
+  assert.equal(r.pending, 1);
+  const ops = (await readPending(dir, ID)).ops;
+  assert.deepEqual(ops.map((o) => [o.op, o.id]), [['upsert-highlight', bad.id]]);
+  assert.match(ops[0].error, /Zotero 항목 생성 실패/);
+  assert.ok(ops[0].failedAt);
+  const notes = await readNotes(dir, ID);
+  assert.ok(notes.highlights.find((h) => h.id === good.id).zoteroKey, 'later op flushed');
+  assert.ok(notes.note.zoteroKey, 'note flushed');
+  assert.equal(notes.highlights.find((h) => h.id === bad.id).comment, 'rejected', 'memo kept locally');
+
+  // not retried on its own
+  const creates = () => w.calls.filter((c) => c === 'createItems').length;
+  const before = creates();
+  const r2 = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(creates(), before);
+  assert.equal(r2.failed, 1);
+
+  // editing that highlight clears the error and retries
+  w.rejectCreate = null;
+  await updateHighlight(dir, ID, bad.id, { comment: 'rejected, fixed' });
+  assert.equal((await readPending(dir, ID)).ops[0].error, undefined);
+  const r3 = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r3.failed, 0);
+  assert.equal(r3.pending, 0);
+  assert.ok((await readNotes(dir, ID)).highlights.find((h) => h.id === bad.id).zoteroKey);
+});
+
+for (const [status, permanent] of [[400, true], [404, true], [403, true], [408, false], [429, false], [500, false], [503, false]]) {
+  test(`http ${status} during flush is ${permanent ? 'permanent (skipped, marked)' : 'transient (stops flush, unmarked)'}`, async () => {
+    const dir = await tmp();
+    await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'a' });
+    await setCardMemo(dir, ID, 'c1', 'memo');
+    const w = fakeWriter();
+    let first = true;
+    const orig = w.createItems;
+    w.createItems = async (list) => {
+      if (first) { first = false; w.calls.push('createItems'); throw new ZoteroWriteError('http', `Zotero 쓰기 실패: HTTP ${status}`, { status }); }
+      return orig(list);
+    };
+    const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+    const ops = (await readPending(dir, ID)).ops;
+    if (permanent) {
+      assert.equal(r.failed, 1);
+      assert.equal(r.pending, 1);
+      assert.equal(ops[0].op, 'upsert-highlight');
+      assert.match(ops[0].error, new RegExp(`HTTP ${status}`));
+      assert.ok((await readNotes(dir, ID)).note.zoteroKey, 'note op after it flushed');
+    } else {
+      assert.equal(r.failed, 0);
+      assert.equal(r.pending, 2, 'stops at first transient failure');
+      assert.ok(ops.every((o) => o.error === undefined));
+      assert.match(r.message, /Zotero 동기화 실패/);
+    }
   });
 }
 

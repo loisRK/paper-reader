@@ -62,7 +62,7 @@ export function createNotesRoutes(cfg, { out, opts, fetchImpl, zotero }, helpers
 
   async function getNotes(id) {
     const b = await loadPaper(id);
-    let sync = { status: 'readonly', pending: 0, message: null };
+    let sync = { status: 'readonly', pending: 0, message: null, failed: 0, failedMessage: null };
     if (!b.example) {
       writer.resetInfo?.();
       const serverInfo = await getServerInfo(cfg);
@@ -73,6 +73,7 @@ export function createNotesRoutes(cfg, { out, opts, fetchImpl, zotero }, helpers
     return {
       highlights: fresh.highlights, cardMemos: fresh.cardMemos, zoteroAnnotations: fresh.zoteroAnnotations,
       note: fresh.note, status: sync.status, pending: sync.pending, message: sync.message,
+      failed: sync.failed ?? 0, failedMessage: sync.failedMessage ?? null,
       needsReextract: b.needsReextract,
     };
   }

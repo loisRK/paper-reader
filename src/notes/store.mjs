@@ -100,12 +100,16 @@ export function withPaper(outputDir, id, fn) {
 
 const now = () => new Date().toISOString();
 
-// Same target -> one op (keeps its queue position, refreshes `at`).
+// Same target -> one op (keeps its queue position, refreshes `at`). A new edit also clears a
+// permanent-failure mark ({ error, failedAt }) so the op is tried again.
 export function enqueue(pending, op, targetId) {
   const same = (o) => o.op === op && (op === 'upsert-note' || o.id === targetId);
   const found = pending.ops.find(same);
-  if (found) found.at = now();
-  else pending.ops.push(op === 'upsert-note' ? { op, at: now() } : { op, id: targetId, at: now() });
+  if (found) {
+    found.at = now();
+    delete found.error;
+    delete found.failedAt;
+  } else pending.ops.push(op === 'upsert-note' ? { op, at: now() } : { op, id: targetId, at: now() });
 }
 
 async function mutate(outputDir, id, fn) {

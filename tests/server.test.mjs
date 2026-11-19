@@ -255,6 +255,8 @@ test('GET notes returns status and runs sync once', async (t) => {
   assert.deepEqual(body.zoteroAnnotations, []);
   assert.equal(body.status, 'offline');
   assert.equal(body.pending, 0);
+  assert.equal(body.failed, 0);
+  assert.equal(body.failedMessage, null);
   assert.equal(body.needsReextract, true);
   assert.ok('pending' in body && 'message' in body && 'note' in body);
   assert.equal(zcalls.info, 1);
