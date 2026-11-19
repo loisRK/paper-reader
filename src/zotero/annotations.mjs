@@ -6,7 +6,10 @@ export const ZOTERO_COLORS = {
 };
 export const TAG = 'paper-reader';
 const DEFAULT_COLOR = ZOTERO_COLORS.yellow;
+// A sentence matches when the overlap covers >= 30% of one annotation rect,
+// or >= 50% of the sentence's own area (a line-wide rect over several short sentences).
 const MATCH_THRESHOLD = 0.3;
+const SENTENCE_THRESHOLD = 0.5;
 
 const pad = (n, w) => String(Math.max(0, Math.trunc(n) || 0)).padStart(w, '0');
 
@@ -80,13 +83,17 @@ export function matchSentences(annotationData, source) {
     .filter((id) => source.sentences[id].page === page && Array.isArray(source.sentences[id].pdfRects))
     .sort((a, b) => seqOf(a) - seqOf(b));
   const sentenceIds = ids.filter((id) => {
-    const sr = source.sentences[id].pdfRects;
-    return rects.some((ar) => {
+    const sr = source.sentences[id].pdfRects.filter((r) => Array.isArray(r) && r.length === 4);
+    const sa = sr.reduce((sum, r) => sum + area(r), 0);
+    let total = 0;
+    for (const ar of rects) {
       const aa = area(ar);
-      if (!aa) return false;
+      if (!aa) continue;
       const ov = sr.reduce((sum, r) => sum + overlap(ar, r), 0);
-      return ov / aa >= MATCH_THRESHOLD;
-    });
+      if (ov / aa >= MATCH_THRESHOLD) return true;
+      total += ov;
+    }
+    return sa > 0 && Math.min(total, sa) / sa >= SENTENCE_THRESHOLD;
   });
   return { page, sentenceIds };
 }

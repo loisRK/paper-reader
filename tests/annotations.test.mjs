@@ -80,6 +80,23 @@ test('matchSentences: 30% threshold', () => {
   assert.deepEqual(miss.sentenceIds, []);
 });
 
+test('matchSentences: one line-wide rect over three short sentences → all three matched', () => {
+  const line = {
+    sentences: {
+      'p1-s1': { text: 'A.', page: 1, pdfRects: [[50, 688, 150, 700]] },
+      'p1-s2': { text: 'B.', page: 1, pdfRects: [[160, 688, 300, 700]] },
+      'p1-s3': { text: 'C.', page: 1, pdfRects: [[310, 688, 450, 700]] },
+      'p1-s4': { text: 'Next line.', page: 1, pdfRects: [[50, 668, 550, 680]] },
+    },
+  };
+  // each sentence covers < 30% of the 500-wide annotation rect, but the rect covers 100% of each sentence
+  const r = matchSentences(pos({ pageIndex: 0, rects: [[50, 688, 550, 700]] }), line);
+  assert.deepEqual(r.sentenceIds, ['p1-s1', 'p1-s2', 'p1-s3']);
+  // a sentence only 20% covered by a much larger rect is still not matched
+  const part = matchSentences(pos({ pageIndex: 0, rects: [[400, 688, 1400, 700]] }), line);
+  assert.deepEqual(part.sentenceIds, []);
+});
+
 test('matchSentences: no overlap or note annotation → empty ids with page', () => {
   assert.deepEqual(matchSentences(pos({ pageIndex: 1, rects: [[0, 0, 10, 10]] }), source), { page: 2, sentenceIds: [] });
   assert.deepEqual(matchSentences(pos({ pageIndex: 0, paths: [[1, 2, 3, 4]] }), source), { page: 1, sentenceIds: [] });
