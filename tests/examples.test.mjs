@@ -92,7 +92,7 @@ test('server lists examples with example flag, null Zotero links, and saves thei
   await new Promise((r) => server.listen(0, '127.0.0.1', r));
   const base = `http://127.0.0.1:${server.address().port}`;
   try {
-    const list = await (await fetch(`${base}/api/papers`)).json();
+    const { papers: list } = await (await fetch(`${base}/api/papers`)).json();
     assert.deepEqual(list.map((p) => [p.id, p.example]), [['ex1', true], ['mine', false]]);
     const body = await (await fetch(`${base}/api/papers/ex1`)).json();
     assert.deepEqual(body.links, { zoteroPdf: null, pdf: false, zoteroItem: null });

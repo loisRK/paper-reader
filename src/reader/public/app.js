@@ -98,7 +98,7 @@ async function route() {
       document.title = `검색 ${name} · Paper Reader`;
       searchView.render(app, { name, search }, actions);
     } else {
-      const [papers, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
+      const [{ papers }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
       if (seq !== routeSeq) return;
       document.title = 'Paper Reader';
       listView.render(app, { papers, searches }, actions);

@@ -6,6 +6,8 @@ import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
 import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
+import { readSettings, writeSettings } from '../library/settings.mjs';
+import { scanFolders } from '../library/scan.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -124,7 +126,8 @@ async function readFigure(paperDir, name) {
 }
 
 export function createServer(cfg, deps = {}) {
-  const { fetchImpl, examplesDir, resolveItem = defaultResolveItem } = deps;
+  const { fetchImpl, examplesDir, resolveItem = defaultResolveItem, md5File: md5Impl } = deps;
+  const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
   const out = cfg.outputDir;
   const opts = { examplesDir };
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
@@ -145,23 +148,71 @@ export function createServer(cfg, deps = {}) {
 
     if (await notesRoutes(req, res, parts, method)) return;
 
+    if (parts[1] === 'library' && parts[2] === 'folders' && parts.length === 3) {
+      if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        try {
+          await writeSettings(dataDir, { folders: body?.folders });
+        } catch (err) {
+          if (err.status === 400) throw new HttpError(400, err.message);
+          throw err;
+        }
+      } else if (method !== 'GET') {
+        throw new HttpError(405, '허용되지 않는 메서드입니다.');
+      }
+      return sendJson(res, 200, await readSettings(dataDir));
+    }
+
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
-      const list = (await listPaperBundles(out, opts)).map((b) => {
+      const bundles = await listPaperBundles(out, opts);
+      const list = bundles.map((b) => {
         const { digest } = validated(b);
         const cards = digest?.cards ?? [];
         const ids = new Set(cards.map((c) => c.id));
+        const hasDigest = b.rawDigest !== null;
         return {
           id: b.id,
           example: b.example,
           title: b.source.meta?.title ?? b.id,
           journal: b.source.meta?.journal ?? '',
           date: b.source.meta?.date ?? '',
-          hasDigest: b.rawDigest !== null,
+          hasDigest,
           cardsRead: new Set(b.progress.read.filter((r) => ids.has(r))).size,
           cardsTotal: cards.length,
+          state: hasDigest ? 'digest' : 'extracted',
+          origin: b.example ? 'example' : b.source.zotero ? 'zotero' : 'folder',
+          linked: Boolean(b.source.zotero),
         };
       });
-      return sendJson(res, 200, list);
+      const folders = [];
+      if (dataDir) {
+        const { folders: paths } = await readSettings(dataDir);
+        if (paths.length) {
+          const scan = await scanFolders(paths, { dataDir, md5: md5Impl });
+          const known = new Set(list.map((p) => p.id));
+          const md5s = new Set();
+          const reals = new Set();
+          for (const b of bundles) {
+            if (b.source.pdf?.md5) md5s.add(b.source.pdf.md5);
+            if (typeof b.source.pdf?.path === 'string') {
+              reals.add(b.source.pdf.path);
+              try { reals.add(await fs.realpath(b.source.pdf.path)); } catch { /* moved or on a missing disk */ }
+            }
+          }
+          for (const f of scan.files) {
+            if (known.has(f.id) || reals.has(f.path) || md5s.has(f.md5)) continue;
+            known.add(f.id);
+            list.push({ id: f.id, title: path.basename(f.rel), state: 'pdf', origin: 'folder', linked: false, file: f.rel });
+          }
+          for (const p of paths) {
+            const problem = scan.problems.find((x) => x.folder === p && x.message.startsWith('폴더를 찾을 수 없습니다'));
+            const warn = scan.problems.find((x) => x.folder === p && !x.message.startsWith('폴더를 찾을 수 없습니다'));
+            folders.push(problem ? { path: p, ok: false, message: problem.message } : warn ? { path: p, ok: true, message: warn.message } : { path: p, ok: true });
+          }
+        }
+      }
+      return sendJson(res, 200, { papers: list, folders });
     }
 
     if (parts[1] === 'papers' && parts.length === 3 && method === 'GET') {

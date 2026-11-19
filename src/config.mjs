@@ -3,6 +3,7 @@ import path from 'node:path';
 
 export const DEFAULTS = {
   outputDir: './digests',
+  dataDir: './data',
   zotero: { baseUrl: 'http://127.0.0.1:23119', authFile: './data/zotero-auth.json' },
   reader: { port: 5173 },
   search: {
@@ -57,6 +58,7 @@ export async function loadConfig(configPath = './paper-reader.config.json') {
   const config = merge(DEFAULTS, user);
   const abs = (p) => (typeof p === 'string' ? path.resolve(baseDir, p) : p);
   config.outputDir = abs(config.outputDir);
+  config.dataDir = abs(config.dataDir);
   config.metrics.sjrCsv = abs(config.metrics.sjrCsv);
   config.metrics.mjlCsv = abs(config.metrics.mjlCsv);
   config.zotero.authFile = abs(config.zotero.authFile);

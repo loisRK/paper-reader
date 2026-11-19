@@ -56,9 +56,12 @@ const post = (p, body) => fetch(base + p, { method: 'POST', headers: { 'content-
 
 test('lists papers with read progress', async () => {
   await put('/api/papers/p1/progress', { read: ['c1', 'zzz'], mode: '3min', focus: false });
-  const list = await (await fetch(`${base}/api/papers`)).json();
+  const { papers: list, folders } = await (await fetch(`${base}/api/papers`)).json();
+  assert.deepEqual(folders, []);
   const p1 = list.find((p) => p.id === 'p1');
-  assert.deepEqual(p1, { id: 'p1', example: false, title: 'T1', journal: 'J1', date: '2025-01-01', hasDigest: true, cardsRead: 1, cardsTotal: 2 });
+  assert.deepEqual(p1, { id: 'p1', example: false, title: 'T1', journal: 'J1', date: '2025-01-01', hasDigest: true, cardsRead: 1, cardsTotal: 2, state: 'digest', origin: 'zotero', linked: true });
+  assert.equal(list.find((p) => p.id === 'p3').state, 'extracted');
+  assert.equal(list.find((p) => p.id === 'p3').linked, false);
   const p2 = list.find((p) => p.id === 'p2');
   assert.equal(p2.cardsTotal, 0);
   assert.ok(!list.some((p) => p.id === '_search'));

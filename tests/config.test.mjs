@@ -14,6 +14,7 @@ test('defaults when file missing', async () => {
   assert.equal(c.search.perTrend, 5);
   assert.equal(c.reader.port, 5173);
   assert.ok(path.isAbsolute(c.outputDir));
+  assert.equal(c.dataDir, '/nonexistent/data');
   assert.ok(path.isAbsolute(c.metrics.sjrCsv));
   assert.equal(c.metrics.mjlCsv, null);
   assert.equal(c.researchContextFile, null);
