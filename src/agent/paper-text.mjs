@@ -9,7 +9,7 @@ export function paperText(source) {
   let page = null;
   for (const block of source?.blocks ?? []) {
     if (block.type === 'references') continue;
-    if (block.page !== page) {
+    if (Number.isInteger(block.page) && block.page !== page) {
       page = block.page;
       lines.push(`## p.${page}`);
     }
@@ -28,6 +28,6 @@ export function paperText(source) {
 
 /** One line per figure/table: `<label> | p.<page> | caption: <captionSentenceId>`. */
 export function figuresText(source) {
-  const lines = (source?.figures ?? []).map((f) => `${f.label} | p.${f.page} | caption: ${f.captionSentenceId}`);
+  const lines = (source?.figures ?? []).map((f) => [f.label, Number.isInteger(f.page) ? `p.${f.page}` : null, f.captionSentenceId ? `caption: ${f.captionSentenceId}` : null].filter(Boolean).join(' | '));
   return lines.length ? `${lines.join('\n')}\n` : '';
 }

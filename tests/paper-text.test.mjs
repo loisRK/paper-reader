@@ -51,3 +51,9 @@ test('figuresText one line per figure', () => {
   assert.equal(figuresText(source), 'Figure 1 | p.2 | caption: p2-s2\nTable 1 | p.3 | caption: p3-s9\n');
   assert.equal(figuresText({ figures: [] }), '');
 });
+
+test('missing page or caption id is omitted, never printed as undefined', () => {
+  const s = { blocks: [{ id: 'b', type: 'paragraph', sentenceIds: ['a'] }], sentences: { a: { text: 'T' } }, figures: [{ label: 'Figure 9' }] };
+  assert.equal(paperText(s), '[a] T\n');
+  assert.equal(figuresText(s), 'Figure 9\n');
+});

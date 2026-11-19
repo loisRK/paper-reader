@@ -28,6 +28,7 @@ async function scratch() {
   const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-test-'));
   await fs.writeFile(path.join(d, 'source.json'), JSON.stringify({
     id: 'p',
+    pages: [{}, {}, {}],
     blocks: [{ id: 'b1', type: 'paragraph', page: 1, sentenceIds: ['p1-s1'] }],
     sentences: { 'p1-s1': { text: 'Body.', page: 1 } },
     figures: [{ label: 'Figure 1', page: 1, captionSentenceId: 'p1-s1' }],
@@ -49,6 +50,7 @@ test('prepareWorkdir creates exactly the allowed files; cleanup removes them', a
   assert.equal((await fs.stat(path.join(w, 'paper.txt'))).mode & 0o777, 0o600);
   assert.doesNotMatch(await fs.readFile(path.join(w, 'TASK.md'), 'utf8'), /source\.json/);
   assert.match(await fs.readFile(path.join(w, 'TASK.md'), 'utf8'), /논문 ID: `p`/);
+  assert.match(await fs.readFile(path.join(w, 'TASK.md'), 'utf8'), /쪽 수: 3/);
   await cleanupWorkdir(w);
   await assert.rejects(fs.stat(w));
 
