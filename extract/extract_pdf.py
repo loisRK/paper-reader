@@ -1,4 +1,4 @@
-"""PDF -> sentence-addressed JSON (source.json without id/zotero/meta).
+"""PDF -> sentence-addressed JSON (source.json without id/zotero; `meta` is the PDF's own bibliographic guess).
 
 Usage: python extract/extract_pdf.py <pdf> <out.json> [--figures-dir <dir>]
 With --figures-dir, figure/table regions are saved there as fig-<page>-<n>.png.
@@ -66,6 +66,61 @@ def _num(v):
     """Round to 1 decimal; integral values become int (612.0 -> 612)."""
     v = _r1(v)
     return int(v) if v == int(v) else v
+
+
+# ------------------------------------------------------------------ meta
+
+DOI_RE = re.compile(r"10\.\d{4,9}/[^\s\"<>]+")
+DOI_TRAILING = ".,;:)]}'\u2019\u201d"
+AUTHOR_SPLIT_RE = re.compile(r"\s*;\s*|\s*,\s*|\s+and\s+", re.IGNORECASE)
+JUNK_TITLE_RE = re.compile(r"^(untitled\b.*|microsoft word\s*-.*|.*\.(docx?|tex|indd|pdf)|none|null)$", re.IGNORECASE)
+MAX_TITLE_CHARS = 300
+TITLE_SIZE_TOLERANCE = 0.5
+
+
+def _clean_title(value):
+    title = re.sub(r"\s+", " ", value or "").strip()
+    return "" if not title or JUNK_TITLE_RE.match(title) else title
+
+
+def _largest_line_title(doc):
+    """Joined lines of the largest text on the first page (title heuristic)."""
+    if len(doc) == 0:
+        return ""
+    lines = []  # (size, text)
+    for block in doc[0].get_text("dict", flags=TEXT_FLAGS)["blocks"]:
+        if block.get("type") != 0:
+            continue
+        for line in block["lines"]:
+            spans = [sp for sp in line["spans"] if sp["text"].strip()]
+            if spans:
+                text = "".join(sp["text"] for sp in line["spans"]).strip()
+                lines.append((max(sp["size"] for sp in spans), text))
+    if not lines:
+        return ""
+    top = max(size for size, _ in lines)
+    picked = [t for size, t in lines if size >= top - TITLE_SIZE_TOLERANCE]
+    return re.sub(r"\s+", " ", " ".join(picked)).strip()[:MAX_TITLE_CHARS]
+
+
+def _meta_date(value):
+    m = re.match(r"D:(\d{4})(\d{2})(\d{2})", value or "")
+    return f"{m.group(1)}-{m.group(2)}-{m.group(3)}" if m else ""
+
+
+def _meta_doi(doc):
+    text = " ".join(doc[i].get_text() for i in range(min(2, len(doc))))
+    m = DOI_RE.search(text)
+    return m.group(0).rstrip(DOI_TRAILING) if m else ""
+
+
+def _build_meta(doc, pdf_path):
+    md = doc.metadata or {}
+    title = (_clean_title(md.get("title")) or _clean_title(_largest_line_title(doc))
+             or os.path.splitext(os.path.basename(pdf_path))[0])
+    authors = [a.strip() for a in AUTHOR_SPLIT_RE.split(md.get("author") or "") if a.strip()]
+    return {"title": title, "authors": authors, "date": _meta_date(md.get("creationDate")),
+            "doi": _meta_doi(doc), "journal": ""}
 
 
 # ---------------------------------------------------------------- blocks
@@ -264,6 +319,7 @@ def extract(pdf_path, figures_dir=None, detect_figures=True):
     doc = pymupdf.open(pdf_path)
     try:
         result = _extract(doc, figures_dir, detect_figures)
+        result["meta"] = _build_meta(doc, pdf_path)
         pdf = {"path": os.path.abspath(pdf_path), "md5": _md5_file(pdf_path)}
         head = {k: result[k] for k in ("extractorVersion", "pymupdfVersion")}
         return {**head, "pdf": pdf, **{k: v for k, v in result.items() if k not in head}}

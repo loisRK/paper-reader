@@ -225,7 +225,8 @@ def test_cli_writes_json_and_exits_2_on_scanned(tmp_path):
     assert ok.returncode == 0, ok.stderr
     assert ok.stdout == ""
     data = json.loads(out.read_text(encoding="utf-8"))
-    assert "id" not in data and "zotero" not in data and "meta" not in data
+    assert "id" not in data and "zotero" not in data
+    assert data["meta"]["title"]
     assert data["sentences"]["p1-s1"]["text"].startswith("This is a filler sentence")
 
     doc = pymupdf.open()
@@ -825,3 +826,74 @@ def test_records_pdf_path_and_md5(tmp_path):
     assert result["pdf"]["path"] == str(Path(pdf).resolve())
     assert Path(result["pdf"]["path"]).is_absolute()
     assert result["pdf"]["md5"] == hashlib.md5(Path(pdf).read_bytes()).hexdigest()
+
+
+# ---- bibliographic meta (folder PDFs without Zotero) ----
+
+
+def make_meta_pdf(path, metadata=None, title_text="A Large Paper Title", extra_first="See doi:10.1145/3503221.3508407."):
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    assert page.insert_textbox(pymupdf.Rect(72, 60, 540, 110), title_text, fontsize=22, fontname="helv") >= 0
+    assert page.insert_textbox(pymupdf.Rect(72, 300, 540, 360), FILLER + " " + extra_first, fontsize=10, fontname="helv") >= 0
+    if metadata is not None:
+        doc.set_metadata(metadata)
+    doc.save(str(path))
+    doc.close()
+    return str(path)
+
+
+def test_meta_from_pdf_metadata(tmp_path):
+    pdf = make_meta_pdf(tmp_path / "m.pdf", {
+        "title": "Metadata Title", "author": "Kim A; Lee B, Park C and Choi D",
+        "creationDate": "D:20240315101500+09'00'"})
+    meta = extract(pdf)["meta"]
+    assert meta["title"] == "Metadata Title"
+    assert meta["authors"] == ["Kim A", "Lee B", "Park C", "Choi D"]
+    assert meta["date"] == "2024-03-15"
+    assert meta["doi"] == "10.1145/3503221.3508407"
+    assert meta["journal"] == ""
+
+
+def test_meta_title_falls_back_to_largest_first_page_text(tmp_path):
+    pdf = make_meta_pdf(tmp_path / "no-meta.pdf", {"title": ""})
+    meta = extract(pdf)["meta"]
+    assert meta["title"] == "A Large Paper Title"
+    assert meta["authors"] == []
+    assert meta["date"] == ""
+
+
+@pytest.mark.parametrize("junk", ["untitled", "Untitled", "   ", "Microsoft Word - draft.docx"])
+def test_meta_junk_title_is_discarded(tmp_path, junk):
+    pdf = make_meta_pdf(tmp_path / "j.pdf", {"title": junk})
+    assert extract(pdf)["meta"]["title"] == "A Large Paper Title"
+
+
+def test_meta_title_last_resort_is_file_name(tmp_path):
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_textbox(pymupdf.Rect(72, 72, 540, 400), FILLER * 3, fontsize=10, fontname="helv")
+    doc.save(str(tmp_path / "my-paper_file.pdf"))
+    doc.close()
+    # same size everywhere: no "largest" lines distinguish a title, but body text still wins over nothing;
+    # an untitled PDF whose first page has no text falls back to the file name
+    doc = pymupdf.open()
+    doc.new_page(width=612, height=792)
+    page2 = doc.new_page(width=612, height=792)
+    page2.insert_textbox(pymupdf.Rect(72, 72, 540, 400), FILLER * 3, fontsize=10, fontname="helv")
+    doc.save(str(tmp_path / "blank-first.pdf"))
+    doc.close()
+    assert extract(str(tmp_path / "blank-first.pdf"))["meta"]["title"] == "blank-first"
+
+
+def test_meta_doi_strips_trailing_punctuation_and_only_scans_two_pages(tmp_path):
+    pdf = make_meta_pdf(tmp_path / "d.pdf", None, extra_first="(https://doi.org/10.1000/abc.def-1).")
+    assert extract(pdf)["meta"]["doi"] == "10.1000/abc.def-1"
+    doc = pymupdf.open()
+    for i in range(3):
+        page = doc.new_page(width=612, height=792)
+        text = FILLER + (" doi 10.9999/late.one" if i == 2 else "")
+        page.insert_textbox(pymupdf.Rect(72, 72, 540, 400), text, fontsize=10, fontname="helv")
+    doc.save(str(tmp_path / "late.pdf"))
+    doc.close()
+    assert extract(str(tmp_path / "late.pdf"))["meta"]["doi"] == ""

@@ -196,3 +196,52 @@ test('exit 0 with stderr prints it as warnings and counts figure images', async 
   assert.deepEqual(errors, ['경고: 2쪽 그림 영역을 찾지 못했습니다: x']);
   assert.match(logs.join('\n'), /그림·표 1개 \(이미지 1개\)/);
 });
+
+// ---- extractFile (folder PDF, no Zotero) ----
+import { extractFile } from '../src/digest/extract-cli.mjs';
+
+const pyMeta = { title: 'PDF Title', authors: ['Kim A'], date: '2024-03-15', doi: '10.1/pdf', journal: '' };
+const pyExtracted = { ...extracted, pdf: { path: '/papers/한글 논문.pdf', md5: 'abc' }, meta: pyMeta };
+
+function filePython(calls = []) {
+  return async (python, args) => {
+    calls.push({ python, args });
+    await fs.writeFile(args[2], JSON.stringify(pyExtracted));
+    return { code: 0, stderr: '' };
+  };
+}
+
+test('extractFile saves source.json with Python meta and no zotero', async () => {
+  const { dir, opts } = await setup();
+  const calls = [];
+  const res = await extractFile({ cfg: opts.cfg, file: '/papers/한글 논문.pdf', id: 'paper-1a2b3c4d', pythonPath: opts.pythonPath, runPython: filePython(calls) });
+  assert.equal(res.id, 'paper-1a2b3c4d');
+  assert.equal(calls[0].args[1], '/papers/한글 논문.pdf');
+  assert.equal(calls[0].args[4], path.join(dir, 'out', 'paper-1a2b3c4d', 'figures'));
+  const saved = JSON.parse(await fs.readFile(path.join(dir, 'out', 'paper-1a2b3c4d', 'source.json'), 'utf8'));
+  assert.deepEqual(saved, res.source);
+  assert.equal(saved.id, 'paper-1a2b3c4d');
+  assert.equal(saved.pdf.path, '/papers/한글 논문.pdf');
+  assert.deepEqual(saved.meta, pyMeta);
+  assert.equal('zotero' in saved, false);
+});
+
+test('extractFile with zoteroLink records keys and lets Zotero meta win', async () => {
+  const { dir, opts } = await setup();
+  const zoteroLink = { itemKey: 'H9RA4VSE', attachmentKey: 'IG8JQQUI', meta: resolved.meta };
+  const { source } = await extractFile({ cfg: opts.cfg, file: '/p.pdf', id: 'x1', zoteroLink, pythonPath: opts.pythonPath, runPython: filePython() });
+  assert.deepEqual(source.zotero, { itemKey: 'H9RA4VSE', attachmentKey: 'IG8JQQUI' });
+  assert.equal(source.meta.title, 'A Reader Paper');
+  const noMeta = await extractFile({ cfg: opts.cfg, file: '/p.pdf', id: 'x2', zoteroLink: { itemKey: 'K', attachmentKey: 'A' }, pythonPath: opts.pythonPath, runPython: filePython() });
+  assert.equal(noMeta.source.meta.title, 'PDF Title');
+  assert.ok(dir);
+});
+
+test('extractFile rejects unsafe id, missing venv and python failure with Korean messages', async () => {
+  const { dir, opts } = await setup();
+  const base = { cfg: opts.cfg, file: '/p.pdf', pythonPath: opts.pythonPath, runPython: filePython() };
+  await assert.rejects(extractFile({ ...base, id: '../evil' }), /폴더 이름으로 쓸 수 없습니다/);
+  await assert.rejects(extractFile({ ...base, id: 'ok', pythonPath: path.join(dir, 'nope') }), (e) => e.message.includes(VENV_INSTALL_COMMAND));
+  await assert.rejects(extractFile({ ...base, id: 'ok', runPython: async () => ({ code: 2, stderr: '스캔 PDF입니다\n' }) }), /^Error: 스캔 PDF입니다$/);
+  await assert.rejects(fs.access(path.join(dir, 'out', 'ok', 'source.json')));
+});

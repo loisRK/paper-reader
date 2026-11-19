@@ -582,3 +582,87 @@ test('serves vendored pdf.js assets with correct MIME types', async () => {
   assert.equal((await ver.text()).trim(), '6.5.438');
   assert.equal((await fetch(`${base}/vendor/pdfjs/nope.bin`)).status, 404);
 });
+
+
+// ---- POST /api/library/extract ----
+async function extractServer(t, deps = {}) {
+  const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-ext-')));
+  const root = path.join(tmp, '논문 폴더');
+  const dataDir = path.join(tmp, 'data');
+  const out = path.join(tmp, 'out');
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(out, { recursive: true });
+  const pdfFile = path.join(root, 'one paper.pdf');
+  await fs.writeFile(pdfFile, Buffer.from('%PDF-1.1\n% one\n%%EOF\n'));
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [root] }));
+  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: path.join(tmp, 'none'), ...deps });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await fs.rm(tmp, { recursive: true, force: true }); });
+  const base = `http://127.0.0.1:${s.address().port}`;
+  const post = (body, headers = { 'content-type': 'application/json' }) => fetch(`${base}/api/library/extract`, { method: 'POST', headers, body: typeof body === 'string' ? body : JSON.stringify(body) });
+  const listed = async () => (await (await fetch(`${base}/api/papers`)).json()).papers.find((p) => p.state === 'pdf');
+  return { post, listed, pdfFile, out, base };
+}
+
+test('extract route: 200 with injected extractor, then link step runs, source PDF untouched', async (t) => {
+  const calls = [];
+  const links = [];
+  let ctx;
+  const extractFile = async ({ cfg, file, id }) => {
+    calls.push({ file, id, outputDir: cfg.outputDir });
+    await fs.mkdir(path.join(cfg.outputDir, id), { recursive: true });
+    await fs.writeFile(path.join(cfg.outputDir, id, 'source.json'), JSON.stringify({ id, meta: { title: 'T' }, pages: [], sentences: {} }));
+    return { id, source: {} };
+  };
+  const linkToZotero = async (outputDir, id) => { links.push({ outputDir, id }); return false; };
+  ctx = await extractServer(t, { extractFile, linkToZotero });
+  const before = await fs.readFile(ctx.pdfFile);
+  const paper = await ctx.listed();
+  assert.ok(paper);
+  assert.equal((await ctx.post({}, { 'content-type': 'text/plain' })).status, 415);
+  const res = await ctx.post({ id: paper.id });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { id: paper.id, state: 'extracted' });
+  assert.equal(calls.length, 1);
+  assert.equal(calls[0].file, ctx.pdfFile);
+  assert.equal(calls[0].id, paper.id);
+  assert.deepEqual(links, [{ outputDir: ctx.out, id: paper.id }]);
+  assert.deepEqual(await fs.readFile(ctx.pdfFile), before);
+});
+
+test('extract route: 404 for unknown id, 400 for bad body, default link step is a no-op', async (t) => {
+  const extractFile = async ({ cfg, id }) => { await fs.mkdir(path.join(cfg.outputDir, id), { recursive: true }); return { id, source: {} }; };
+  const { post, listed } = await extractServer(t, { extractFile });
+  const miss = await post({ id: 'ghost-12345678' });
+  assert.equal(miss.status, 404);
+  assert.equal((await miss.json()).error, '폴더에서 이 PDF를 찾을 수 없습니다.');
+  assert.equal((await post({ id: '../x' })).status, 400);
+  assert.equal((await post({})).status, 400);
+  assert.equal((await post({ id: (await listed()).id })).status, 200);
+});
+
+test('extract route: 409 while another extraction runs, 500 with the reason on failure, then free again', async (t) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  let n = 0;
+  const extractFile = async ({ id }) => {
+    n += 1;
+    if (n === 1) await gate;
+    if (n === 2) throw new Error('텍스트를 추출할 수 없습니다(스캔 PDF로 보입니다).');
+    return { id, source: {} };
+  };
+  const { post, listed } = await extractServer(t, { extractFile });
+  const id = (await listed()).id;
+  const first = post({ id });
+  await new Promise((r) => setTimeout(r, 100));
+  const busy = await post({ id });
+  assert.equal(busy.status, 409);
+  assert.equal((await busy.json()).error, '다른 논문을 추출하고 있습니다. 끝난 뒤 다시 시도하세요.');
+  release();
+  assert.equal((await first).status, 200);
+  const fail = await post({ id });
+  assert.equal(fail.status, 500);
+  assert.match((await fail.json()).error, /스캔 PDF/);
+  assert.equal((await post({ id })).status, 200);
+});

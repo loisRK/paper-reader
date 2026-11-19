@@ -25,6 +25,80 @@ function defaultRunPython(python, args) {
 
 const saveError = (err) => `추출 결과를 저장하지 못했습니다: ${String(err?.message ?? err).split('\n')[0]}`;
 
+// Message is already user-facing (Korean); callers print it as is.
+class ExtractFailure extends Error {}
+
+async function checkPython(pythonPath) {
+  try {
+    await fs.access(pythonPath);
+  } catch {
+    throw new ExtractFailure(`Python 추출기 환경(.venv)이 없습니다. 저장소 루트에서 먼저 설치하세요:\n  ${VENV_INSTALL_COMMAND}`);
+  }
+}
+
+// Shared by main() and extractFile(): run the Python extractor on pdfPath and save
+// <outputDir>/<id>/source.json with { extractorVersion, pymupdfVersion, id, [zotero], meta, ...rest }.
+// meta: `meta` argument (Zotero) if given, else the PDF's own (Python) meta.
+async function extractAndSave({ cfg, id, pdfPath, zotero, meta, pythonPath, runPython, warn }) {
+  // Figure/table images go next to source.json (fig-<page>-<n>.png; names never come from user input).
+  const figuresDir = path.join(cfg.outputDir, id, 'figures');
+  try {
+    await fs.mkdir(figuresDir, { recursive: true });
+  } catch (err) {
+    throw new ExtractFailure(saveError(err));
+  }
+
+  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-extract-'));
+  const tmpFile = path.join(tmpDir, 'source.json');
+  let extracted;
+  try {
+    const { code, stderr } = await runPython(pythonPath, [SCRIPT, pdfPath, tmpFile, '--figures-dir', figuresDir]);
+    if (code !== 0) throw new ExtractFailure((stderr || '').trim() || `PDF 추출 실패 (exit ${code})`);
+    for (const line of (stderr || '').split('\n').map((l) => l.trim()).filter(Boolean)) warn(`경고: ${line}`);
+    extracted = JSON.parse(await fs.readFile(tmpFile, 'utf8'));
+  } catch (err) {
+    throw err instanceof ExtractFailure ? err : new ExtractFailure(saveError(err));
+  } finally {
+    await fs.rm(tmpDir, { recursive: true, force: true });
+  }
+
+  const { extractorVersion, pymupdfVersion, meta: pdfMeta, ...rest } = extracted;
+  const source = {
+    extractorVersion,
+    pymupdfVersion,
+    id,
+    ...(zotero ? { zotero } : {}),
+    meta: meta ?? pdfMeta,
+    ...rest,
+  };
+  const outFile = path.join(cfg.outputDir, id, 'source.json');
+  try {
+    await fs.mkdir(path.dirname(outFile), { recursive: true });
+    await fs.writeFile(outFile, `${JSON.stringify(source, null, 1)}\n`);
+  } catch (err) {
+    throw new ExtractFailure(saveError(err));
+  }
+  return { source, outFile };
+}
+
+// Extract a PDF by path, without Zotero. zoteroLink ({ itemKey, attachmentKey, meta? }) is optional.
+// Throws Error with a Korean message on failure.
+export async function extractFile({ cfg, file, id, zoteroLink, pythonPath = DEFAULT_PYTHON, runPython = defaultRunPython, warn = () => {} }) {
+  if (!isSafeName(id)) throw new ExtractFailure(`이 항목 ID(${id})는 폴더 이름으로 쓸 수 없습니다.`);
+  await checkPython(pythonPath);
+  const { source } = await extractAndSave({
+    cfg,
+    id,
+    pdfPath: file,
+    zotero: zoteroLink ? { itemKey: zoteroLink.itemKey, attachmentKey: zoteroLink.attachmentKey } : undefined,
+    meta: zoteroLink?.meta,
+    pythonPath,
+    runPython,
+    warn,
+  });
+  return { id, source };
+}
+
 export async function main(argv = process.argv.slice(2), opts = {}) {
   const {
     resolveItem = defaultResolveItem,
@@ -39,9 +113,9 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     return 1;
   }
   try {
-    await fs.access(pythonPath);
-  } catch {
-    error(`Python 추출기 환경(.venv)이 없습니다. 저장소 루트에서 먼저 설치하세요:\n  ${VENV_INSTALL_COMMAND}`);
+    await checkPython(pythonPath);
+  } catch (err) {
+    error(err.message);
     return 1;
   }
   let cfg = opts.cfg;
@@ -66,50 +140,23 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     return 1;
   }
 
-  // Figure/table images go next to source.json (fig-<page>-<n>.png; names never come from user input).
-  const figuresDir = path.join(cfg.outputDir, item.id, 'figures');
+  let result;
   try {
-    await fs.mkdir(figuresDir, { recursive: true });
+    result = await extractAndSave({
+      cfg,
+      id: item.id,
+      pdfPath: item.pdfPath,
+      zotero: { itemKey: item.itemKey, attachmentKey: item.attachmentKey },
+      meta: item.meta,
+      pythonPath,
+      runPython,
+      warn: error,
+    });
   } catch (err) {
-    error(saveError(err));
+    error(err instanceof ExtractFailure ? err.message : saveError(err));
     return 1;
   }
-
-  const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-extract-'));
-  const tmpFile = path.join(tmpDir, 'source.json');
-  let extracted;
-  try {
-    const { code, stderr } = await runPython(pythonPath, [SCRIPT, item.pdfPath, tmpFile, '--figures-dir', figuresDir]);
-    if (code !== 0) {
-      error((stderr || '').trim() || `PDF 추출 실패 (exit ${code})`);
-      return 1;
-    }
-    for (const line of (stderr || '').split('\n').map((l) => l.trim()).filter(Boolean)) error(`경고: ${line}`);
-    extracted = JSON.parse(await fs.readFile(tmpFile, 'utf8'));
-  } catch (err) {
-    error(saveError(err));
-    return 1;
-  } finally {
-    await fs.rm(tmpDir, { recursive: true, force: true });
-  }
-
-  const { extractorVersion, pymupdfVersion, ...rest } = extracted;
-  const source = {
-    extractorVersion,
-    pymupdfVersion,
-    id: item.id,
-    zotero: { itemKey: item.itemKey, attachmentKey: item.attachmentKey },
-    meta: item.meta,
-    ...rest,
-  };
-  const outFile = path.join(cfg.outputDir, item.id, 'source.json');
-  try {
-    await fs.mkdir(path.dirname(outFile), { recursive: true });
-    await fs.writeFile(outFile, `${JSON.stringify(source, null, 1)}\n`);
-  } catch (err) {
-    error(saveError(err));
-    return 1;
-  }
+  const { source, outFile } = result;
 
   const nImages = (source.figures ?? []).filter((f) => f.image).length;
   const nSentences = Object.keys(source.sentences ?? {}).length;

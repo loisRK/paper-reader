@@ -8,6 +8,7 @@ import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/loca
 import { createNotesRoutes } from './notes-routes.mjs';
 import { readSettings, writeSettings } from '../library/settings.mjs';
 import { scanFolders } from '../library/scan.mjs';
+import { createExtractJob } from '../library/extract-job.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -129,6 +130,7 @@ export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir, resolveItem = defaultResolveItem, md5File: md5Impl } = deps;
   const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
   const out = cfg.outputDir;
+  const runExtract = createExtractJob({ cfg, dataDir, md5: md5Impl, extractFile: deps.extractFile, linkToZotero: deps.linkToZotero, linkDeps: { fetchImpl } });
   const opts = { examplesDir };
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
@@ -162,6 +164,18 @@ export function createServer(cfg, deps = {}) {
         throw new HttpError(405, '허용되지 않는 메서드입니다.');
       }
       return sendJson(res, 200, await readSettings(dataDir));
+    }
+
+    if (parts[1] === 'library' && parts[2] === 'extract' && parts.length === 3) {
+      if (method !== 'POST') throw new HttpError(405, '허용되지 않는 메서드입니다.');
+      const body = await readBody(req);
+      const id = checkName(body?.id, 'id');
+      try {
+        return sendJson(res, 200, await runExtract(id));
+      } catch (err) {
+        if (err.status) throw new HttpError(err.status, err.message);
+        throw err;
+      }
     }
 
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
