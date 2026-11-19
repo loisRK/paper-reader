@@ -76,6 +76,26 @@ test('merges id, zotero keys and meta into <outputDir>/<id>/source.json', async 
   await assert.rejects(fs.access(calls[1].args[2]), 'temp file is cleaned up');
 });
 
+test('passes --figures-dir <outputDir>/<id>/figures to the extractor and creates it', async () => {
+  const { dir, opts } = await setup();
+  let seen;
+  const code = await main(['H9RA4VSE'], {
+    ...opts,
+    resolveItem: async () => resolved,
+    runPython: async (_py, args) => {
+      seen = args;
+      const stat = await fs.stat(args[4]);
+      assert.ok(stat.isDirectory(), 'figures dir exists before the extractor runs');
+      await fs.writeFile(args[2], JSON.stringify(extracted));
+      return { code: 0, stderr: '' };
+    },
+  });
+  assert.equal(code, 0);
+  assert.equal(seen.length, 5);
+  assert.equal(seen[3], '--figures-dir');
+  assert.equal(seen[4], path.join(dir, 'out', 'kim2025reader', 'figures'));
+});
+
 test('missing .venv prints install command and exits 1', async () => {
   const { dir, errors, opts } = await setup();
   let resolvedCalled = false;

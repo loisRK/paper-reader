@@ -66,11 +66,20 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
     return 1;
   }
 
+  // Figure/table images go next to source.json (fig-<page>-<n>.png; names never come from user input).
+  const figuresDir = path.join(cfg.outputDir, item.id, 'figures');
+  try {
+    await fs.mkdir(figuresDir, { recursive: true });
+  } catch (err) {
+    error(saveError(err));
+    return 1;
+  }
+
   const tmpDir = await fs.mkdtemp(path.join(os.tmpdir(), 'paper-reader-extract-'));
   const tmpFile = path.join(tmpDir, 'source.json');
   let extracted;
   try {
-    const { code, stderr } = await runPython(pythonPath, [SCRIPT, item.pdfPath, tmpFile]);
+    const { code, stderr } = await runPython(pythonPath, [SCRIPT, item.pdfPath, tmpFile, '--figures-dir', figuresDir]);
     if (code !== 0) {
       error((stderr || '').trim() || `PDF 추출 실패 (exit ${code})`);
       return 1;
