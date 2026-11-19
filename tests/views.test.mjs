@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText, needsCommentSave, createPoller } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -132,6 +132,49 @@ test('failedText: count of memos Zotero refused, empty when none', () => {
   assert.equal(failedText(2), '보내지 못한 메모 2개');
   assert.equal(failedText(0), '');
   assert.equal(failedText(undefined), '');
+});
+
+test('needsCommentSave: only when the textarea differs from the saved comment', () => {
+  assert.equal(needsCommentSave('a', 'a'), false);
+  assert.equal(needsCommentSave('a', 'ab'), true);
+  assert.equal(needsCommentSave(undefined, ''), false);
+  assert.equal(needsCommentSave(null, ''), false);
+  assert.equal(needsCommentSave('', 'x'), true);
+  assert.equal(needsCommentSave('x', ''), true, 'clearing the memo is a change too');
+  assert.equal(needsCommentSave('a', undefined), false);
+});
+
+function pollTimers() {
+  const live = new Map();
+  let id = 0;
+  return {
+    live,
+    setTimeout: (fn) => { live.set(++id, fn); return id; },
+    clearTimeout: (t) => { live.delete(t); },
+    fire() { const [[t, fn]] = [...live]; live.delete(t); return fn(); },
+  };
+}
+
+test('createPoller: kick while a run is in flight leaves exactly one timer chain', async () => {
+  const timers = pollTimers();
+  const pending = [];
+  let runs = 0;
+  const run = () => { runs += 1; return new Promise((r) => pending.push(r)); };
+  const p = createPoller({ run, ms: 5000, ...timers });
+  const a = p.kick();
+  const b = p.kick(); // e.g. visibilitychange during the first poll
+  pending.splice(0).forEach((r) => r());
+  await Promise.all([a, b]);
+  assert.equal(timers.live.size, 1, 'one chain');
+  const c = timers.fire();
+  pending.splice(0).forEach((r) => r());
+  await c;
+  assert.equal(timers.live.size, 1);
+  assert.equal(runs, 3);
+  p.stop();
+  assert.equal(timers.live.size, 0);
+  await p.kick();
+  assert.equal(timers.live.size, 0, 'stopped poller never reschedules');
 });
 
 test('NOTE_COLORS matches ZOTERO_COLORS (source of truth)', () => {

@@ -77,6 +77,31 @@ export function statusText(status, pending) {
   }
 }
 
+// The popover's textarea holds an edit that is not saved yet.
+export const needsCommentSave = (original, current) => typeof current === 'string' && current !== (original ?? '');
+
+// One polling chain: kick() runs now and reschedules; a kick during a run (e.g. the tab became
+// visible again) supersedes the older chain instead of starting a second one.
+export function createPoller({ run, ms, setTimeout: st = globalThis.setTimeout, clearTimeout: ct = globalThis.clearTimeout }) {
+  let timer = null;
+  let gen = 0;
+  let stopped = false;
+  async function kick() {
+    if (stopped) return;
+    const g = ++gen;
+    if (timer !== null) { ct(timer); timer = null; }
+    try {
+      await run();
+    } finally {
+      if (!stopped && g === gen) timer = st(kick, ms);
+    }
+  }
+  return {
+    kick,
+    stop() { stopped = true; if (timer !== null) ct(timer); timer = null; },
+  };
+}
+
 // Ops Zotero refused permanently (kept on this computer, retried after an edit).
 export const failedText = (n) => (n > 0 ? `보내지 못한 메모 ${n}개` : '');
 
@@ -123,7 +148,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   for (const b of source.blocks ?? []) {
     for (const sid of b.sentenceIds ?? []) { order.push(sid); pageOf.set(sid, b.page); }
   }
-  const s = { notes: emptyNotes(), lastJson: null, color: DEFAULT_COLOR, popover: null, pop: null, sel: null, disposed: false };
+  const s = { notes: emptyNotes(), lastJson: null, color: DEFAULT_COLOR, popover: null, pop: null, edits: [], sel: null, disposed: false };
   const statusNode = el('div', { class: 'notes-status', role: 'status' });
   const toolbar = el('div', { class: 'sel-toolbar', role: 'toolbar', 'aria-label': '선택한 문장 메모', hidden: true });
   document.body.append(toolbar);
@@ -188,10 +213,33 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   }
 
   // ----- popover -----
-  function closePopover() {
+  function removePopover() {
     s.pop?.remove();
     s.pop = null;
     s.popover = null;
+    s.edits = [];
+  }
+  const unsavedEdits = () => s.edits.filter((e) => needsCommentSave(e.original, e.area.value));
+
+  // Saves typed memo text first; on failure (toast) the popover stays open with the text.
+  // Resolves true when closed.
+  let closing = null;
+  function closePopover() {
+    if (!s.pop) return Promise.resolve(true);
+    closing ??= (async () => {
+      try {
+        for (const e of unsavedEdits()) {
+          const value = e.area.value;
+          if (!(await e.put({ comment: value }))) return false;
+          e.original = value;
+        }
+        removePopover();
+        return true;
+      } finally {
+        closing = null;
+      }
+    })();
+    return closing;
   }
 
   function place(node, rect) {
@@ -208,9 +256,9 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
 
   const sentEl = (sid) => panel.querySelector(`[data-sid="${CSS.escape(sid)}"]`);
 
-  function openPopover(sid, anchor, focusText = false) {
+  async function openPopover(sid, anchor, focusText = false) {
     if (s.disposed) return;
-    closePopover();
+    if (!(await closePopover()) || s.disposed) return;
     const marks = (sentenceMarks(s.notes).get(sid) ?? []);
     const parts = [];
     for (const m of marks) {
@@ -227,7 +275,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     }
     if (!parts.length) return;
     const pop = el('div', { class: 'note-pop', role: 'dialog', 'aria-label': '메모' }, parts,
-      el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '메모 창 닫기', onclick: closePopover }));
+      el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '메모 창 닫기', onclick: () => closePopover() }));
     s.pop = pop;
     s.popover = sid;
     document.body.append(pop);
@@ -241,11 +289,14 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     const put = async (patch) => {
       try { replaceHighlight(await actions.updateHighlight(id, h.id, patch)); return true; } catch (e) { fail(e); return false; }
     };
+    const edit = { area, original: h.comment ?? '', put };
+    s.edits.push(edit);
     const remove = async () => {
       try {
         await actions.removeHighlight(id, h.id);
         s.notes.highlights = s.notes.highlights.filter((x) => x.id !== h.id);
-        closePopover();
+        s.edits = s.edits.filter((x) => x !== edit);
+        await closePopover();
         renderMarks();
       } catch (e) { fail(e); }
     };
@@ -265,7 +316,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
       swatches(h.color, async (color) => { if (await put({ color })) h.color = color; }),
       el('div', { class: 'pop-actions' },
         el('button', { type: 'button', class: 'btn', text: '저장', 'aria-label': '메모 저장',
-          onclick: async () => { if (await put({ comment: area.value })) closePopover(); } }),
+          onclick: async () => { const value = area.value; if (await put({ comment: value })) { edit.original = value; closePopover(); } } }),
         el('button', { type: 'button', class: 'btn btn-quiet', text: '삭제', 'aria-label': '하이라이트 삭제', onclick: remove })));
   }
 
@@ -349,7 +400,6 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   document.addEventListener('mousedown', onDocDown);
 
   // ----- polling -----
-  let timer = 0;
   let inflight = false;
   async function poll() {
     if (s.disposed || inflight || document.hidden) return;
@@ -364,28 +414,31 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
         renderStatus();
         renderMarks();
         onNotes?.(n);
-        if (s.popover && !(sentenceMarks(n).has(s.popover))) closePopover();
+        // Highlight gone: close, unless typed text is unsaved (left open so it is not lost).
+        if (s.popover && !(sentenceMarks(n).has(s.popover)) && !unsavedEdits().length) removePopover();
         if (s.sel) renderToolbar();
       }
     } catch { /* keep the last good state; the next tick retries */ } finally { inflight = false; }
   }
-  const tick = async () => { await poll(); if (!s.disposed) timer = setTimeout(tick, POLL_MS); };
-  const onVis = () => { if (!document.hidden) { clearTimeout(timer); tick(); } };
+  const poller = createPoller({ run: poll, ms: POLL_MS });
+  const onVis = () => { if (!document.hidden) poller.kick(); };
   document.addEventListener('visibilitychange', onVis);
-  tick();
+  poller.kick();
 
   return {
     statusNode,
     refresh: poll,
     dispose() {
       s.disposed = true;
-      clearTimeout(timer);
+      poller.stop();
       cancelAnimationFrame(raf);
       document.removeEventListener('selectionchange', onSelChange);
       document.removeEventListener('keydown', onDocKey);
       document.removeEventListener('mousedown', onDocDown);
       document.removeEventListener('visibilitychange', onVis);
-      closePopover();
+      // Leaving the page: send unsaved popover text without waiting.
+      for (const e of unsavedEdits()) e.put({ comment: e.area.value });
+      removePopover();
       toolbar.remove();
     },
   };
