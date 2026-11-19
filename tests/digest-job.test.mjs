@@ -43,8 +43,8 @@ async function setup(t, { pdfIds = [], extract, runs, agent = 'claude', research
   const calls = [];
   const workdirs = [];
   // runs: array of (workdir, call) => result | Promise, one per attempt.
-  const runAgent = ({ id, workdir, prompt, onLog, configDir }) => {
-    const call = { id, workdir, prompt, files: null, cancelled: false, onLog, configDir };
+  const runAgent = ({ id, workdir, prompt, onLog, configDir, label }) => {
+    const call = { id, workdir, prompt, files: null, cancelled: false, onLog, configDir, label };
     calls.push(call);
     workdirs.push(workdir);
     let resolveCancel;
@@ -394,6 +394,7 @@ test('a Claude account from selectAgent: label in the job, its dir only passed t
   assert.equal(job.profile, 'claude-yvin');
   await settled(c.jobs, 'p1');
   assert.equal(c.calls[0].configDir, '/h/.claude/yvin');
+  assert.equal(c.calls[0].label, 'claude-yvin', 'the account label names the command in a login hint');
   assert.doesNotMatch(JSON.stringify(c.jobs.get('p1')), /\.claude\/yvin/);
   assert.deepEqual(recorded, [{ agent: 'claude', profile: 'claude-yvin', model: 'claude-sonnet-4-5' }]);
 });

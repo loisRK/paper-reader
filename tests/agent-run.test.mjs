@@ -186,6 +186,27 @@ test('runAgent: errorHint for login and usage-limit output', async () => {
   assert.equal((await done).errorHint, undefined);
 });
 
+const EXPIRED = 'Failed to authenticate: this login reached its time limit and cannot be renewed. Run `claude auth login` to sign in again, or use `claude setup-token` and set CLAUDE_CODE_OAUTH_TOKEN for unattended jobs';
+
+test('runAgent: an expired Claude login is a login hint naming the picked account', async () => {
+  const run = async (extra, where = 'stdout') => {
+    const { impl, calls } = fakeSpawn();
+    const { done } = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {}, ...extra });
+    const line = where === 'stdout' ? `${JSON.stringify({ type: 'result', is_error: true, result: EXPIRED })}\n` : `${EXPIRED}\n`;
+    calls[0].child[where].write(line);
+    calls[0].child.stdout.end(); calls[0].child.stderr.end();
+    await tick();
+    calls[0].child.emit('close', 1, null);
+    return (await done).errorHint;
+  };
+  assert.equal(await run({}, 'stderr'), 'AI 도구 로그인이 필요합니다. 터미널에서 claude를 한 번 실행해 로그인하세요.');
+  assert.equal(await run({}), 'AI 도구 로그인이 필요합니다. 터미널에서 claude를 한 번 실행해 로그인하세요.');
+  assert.equal(await run({ label: 'claude-yvin' }), 'AI 도구 로그인이 필요합니다. 터미널에서 claude-yvin을(를) 한 번 실행해 로그인하세요.');
+  assert.equal(await run({ label: 'claude' }), 'AI 도구 로그인이 필요합니다. 터미널에서 claude를 한 번 실행해 로그인하세요.');
+  // a label that is not a plain alias name (e.g. a path) is never shown
+  assert.equal(await run({ label: '/Users/x/.claude' }), 'AI 도구 로그인이 필요합니다. 터미널에서 claude를 한 번 실행해 로그인하세요.');
+});
+
 test('runAgent: spawn error resolves done with a Korean hint', async () => {
   const { impl, calls } = fakeSpawn();
   const { done } = runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });

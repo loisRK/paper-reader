@@ -184,6 +184,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
         ctx.handle = runAgent({
           id: job.agent,
           ...(ctx.configDir ? { configDir: ctx.configDir } : {}),
+          ...(job.profile ? { label: job.profile } : {}),
           workdir,
           prompt: buildPrompt({ attempt, problems }),
           onLog: (line) => addLog(job, line),

@@ -120,11 +120,16 @@ function modelFrom(id, line) {
   return null;
 }
 
-const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|set an auth method|GEMINI_API_KEY|UNAUTHENTICATED/i;
+const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|set an auth method|GEMINI_API_KEY|UNAUTHENTICATED|failed to authenticate|auth login|reached its time limit|setup-token/i;
+const LABEL_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached|RESOURCE_EXHAUSTED/i;
 
-function hintFor(id, text) {
-  if (LOGIN_RE.test(text)) return `AI 도구 로그인이 필요합니다. 터미널에서 ${id}를 한 번 실행해 로그인하세요.`;
+// label: the picked Claude account's alias (e.g. claude-yvin), shown only when it is a plain name.
+function hintFor(id, text, label) {
+  if (LOGIN_RE.test(text)) {
+    const who = typeof label === 'string' && LABEL_RE.test(label) && label !== id ? `${label}을(를)` : `${id}를`;
+    return `AI 도구 로그인이 필요합니다. 터미널에서 ${who} 한 번 실행해 로그인하세요.`;
+  }
   if (LIMIT_RE.test(text)) return 'AI 도구 사용량 한도에 걸렸습니다. 잠시 후 다시 시도하세요.';
   return undefined;
 }
@@ -132,7 +137,7 @@ function hintFor(id, text) {
 const SPAWN_FAIL = 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.';
 
 export function runAgent({
-  id, workdir, prompt, configDir, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
+  id, workdir, prompt, configDir, label, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
   spawnImpl = spawn, killImpl = process.kill, onLog = () => {},
 }) {
   const failed = (hint) => ({ done: Promise.resolve({ code: null, signal: null, timedOut: false, errorHint: hint }), cancel() {} });
@@ -224,7 +229,7 @@ export function runAgent({
       const result = { code, signal, timedOut };
       if (model) result.model = model;
       if (code !== 0 && !timedOut) {
-        const hint = hintFor(id, tail);
+        const hint = hintFor(id, tail, label);
         if (hint) result.errorHint = hint;
       }
       finish(result);
