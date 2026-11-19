@@ -118,6 +118,7 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .tile-progress { display: flex; align-items: center; gap: .6rem; margin-bottom: .5rem; }
 .tile-count { font-size: .82rem; color: var(--muted); white-space: nowrap; }
 .paper-tile .tag { margin-left: 0; }
+.paper-tile .tag-example { margin-left: .4rem; background: var(--accent-soft); color: var(--accent-strong); }
 .link-list { padding-left: 1.2rem; }
 .link-list li { margin: .3rem 0; }
 

@@ -1,0 +1,238 @@
+{
+  "version": 1,
+  "paperId": "NguyenEtAlMeCoLog2026",
+  "takeaway": {
+    "text": "MeCoLog은 로그 파라미터 정보와 '정상은 모으고 이상은 흩어 두는' 비대칭 대조 학습으로, 라벨이 거의 없는 새 시스템에서도 로그 이상 탐지(log anomaly detection)를 해낸다.",
+    "evidence": ["p1-s10", "p1-s11", "p1-s14", "p1-s15", "p1-s24"],
+    "why": "새로 배포한 시스템은 학습 데이터가 거의 없다는 운영 현실의 문제를, 재학습 없이 소수 샘플로 푸는 방법이라 AIOps 실무와 직결된다."
+  },
+  "cards": [
+    {
+      "id": "c1",
+      "section": "motivation",
+      "question": "왜 로그 이상 탐지를 자동화해야 할까?",
+      "answer": "시스템이 커지면서 사람이 로그를 직접 보는 것이 불가능해졌기 때문이다.",
+      "bridge": "",
+      "items": [
+        { "kind": "claim", "text": "로그는 장애 진단·보안 분석의 핵심 증거다", "evidence": ["p1-s32", "p1-s33"] },
+        { "kind": "claim", "text": "비정상 로그 패턴은 장애·공격의 조기 신호가 된다", "evidence": ["p2-s2"] },
+        { "kind": "claim", "text": "규모가 커지며 수동 점검은 비현실적이 됐다", "evidence": ["p2-s3", "p2-s4"] },
+        { "kind": "claim", "text": "딥러닝(LSTM·Transformer) 방법이 단일 시스템에서 성과를 냈다", "evidence": ["p2-s12", "p2-s14"] }
+      ]
+    },
+    {
+      "id": "c2",
+      "section": "gap",
+      "question": "기존 방법은 새 시스템에서 왜 실패할까?",
+      "answer": "라벨이 부족하고, 시스템마다 로그 어휘·구조가 달라 지식이 옮겨 가지 않는다.",
+      "bridge": "그런데 이 방법들은 학습한 시스템을 벗어나면 성능이 떨어진다.",
+      "items": [
+        { "kind": "claim", "text": "새 환경에 적용하면 효과가 줄어드는 경향이 있다", "evidence": ["p2-s15"] },
+        { "kind": "claim", "text": "새 시스템마다 라벨을 모아 재학습하기는 비용이 크다", "evidence": ["p2-s16"] },
+        { "kind": "claim", "text": "Drain 같은 파서는 파라미터를 와일드카드로 지워 단서를 잃는다", "evidence": ["p2-s30", "p2-s31"] },
+        { "kind": "claim", "text": "시스템 간 어휘 일치도(Jaccard)는 0.07–0.25로 매우 낮다", "evidence": ["p5-s5"] },
+        { "kind": "claim", "text": "이상은 다양한데 기존 목적함수는 한 군집으로 몰아넣는다", "evidence": ["p3-s7", "p3-s9"] }
+      ],
+      "figures": [
+        { "label": "Figure 2", "page": 5, "note": "데이터셋 간 템플릿 어휘의 의미·어휘 유사도 비교" },
+        { "label": "Figure 3", "page": 6, "note": "정상은 뭉치고 이상은 흩어진 원본 데이터 분포" }
+      ]
+    },
+    {
+      "id": "c3",
+      "section": "idea",
+      "question": "저자들의 해결 방향은 한 줄로 무엇인가?",
+      "answer": "파라미터까지 담은 표현을 만들고, 정상만 조밀하게 모으는 메타 학습으로 소수 샘플에 적응한다.",
+      "bridge": "그래서 저자들은 세 가지 연구 질문(RQ)에 각각 장치를 하나씩 붙였다.",
+      "items": [
+        { "kind": "claim", "text": "탐지를 에피소드형 퓨샷(few-shot) 학습 문제로 정식화했다", "evidence": ["p3-s14", "p3-s15"] },
+        { "kind": "claim", "text": "새 시스템에는 재학습 없이 소수 라벨 지원 집합만 쓴다", "evidence": ["p3-s16"] },
+        { "kind": "claim", "text": "정상 행동은 시스템을 가리지 않는 안정적 기준점이 된다", "evidence": ["p3-s22", "p3-s23"] },
+        { "kind": "opinion", "text": "핵심은 '이상을 억지로 한 덩어리로 보지 않는다'는 관점 전환이다", "evidence": ["p3-s24"] }
+      ]
+    },
+    {
+      "id": "c4",
+      "section": "method",
+      "question": "로그 파라미터를 어떻게 시스템 독립적으로 표현할까?",
+      "answer": "파라미터를 키·값·유형으로 나누고, 유형별로 다른 방식으로 임베딩한다.",
+      "bridge": "먼저 파서가 버리던 파라미터를 되살리는 것부터 시작한다.",
+      "items": [
+        { "kind": "claim", "text": "파라미터를 (키, 값, 유형) 튜플로 추출한다", "evidence": ["p6-s16"] },
+        { "kind": "claim", "text": "유형은 NUM·IP·HEX·PATH·STR 다섯 가지다", "evidence": ["p6-s17"] },
+        { "kind": "claim", "text": "문자열·경로는 문자 단위 CNN(CharCNN)으로 인코딩한다", "evidence": ["p6-s21"] },
+        { "kind": "claim", "text": "숫자는 로그 스케일로 변환해 큰 값이 압도하지 않게 한다", "evidence": ["p6-s23"] },
+        { "kind": "claim", "text": "IP·HEX는 값 대신 유형 임베딩만 써 시스템 잡음을 막는다", "evidence": ["p7-s3", "p7-s4"] }
+      ],
+      "figures": [
+        { "label": "Figure 6", "page": 9, "note": "파라미터 유형별 인코딩 파이프라인" }
+      ]
+    },
+    {
+      "id": "c5",
+      "section": "method",
+      "question": "파라미터와 순서 정보를 Transformer에 어떻게 넣을까?",
+      "answer": "게이트로 걸러 attention의 key에 주입(GKI)하고, 상대 위치는 RoPE로 다룬다.",
+      "bridge": "그다음 이 파라미터 벡터를 템플릿 의미와 함께 인코더에 넣는다.",
+      "items": [
+        { "kind": "claim", "text": "템플릿 의미는 고정(frozen)된 SBERT 임베딩을 쓴다", "evidence": ["p9-s16"] },
+        { "kind": "claim", "text": "파라미터는 self-attention의 key 투영에만 주입된다", "evidence": ["p9-s19"] },
+        { "kind": "claim", "text": "시그모이드 게이트가 고카디널리티 잡음을 억제한다", "evidence": ["p10-s12"] },
+        { "kind": "claim", "text": "RoPE로 이벤트 간 상대 거리를 attention에 반영한다", "evidence": ["p10-s13", "p10-s17"] },
+        { "kind": "claim", "text": "값 이상과 순서 이상을 한 번의 attention으로 함께 잡는다", "evidence": ["p11-s5"] }
+      ],
+      "figures": [
+        { "label": "Figure 4", "page": 7, "note": "MeCoLog 전체 파이프라인" },
+        { "label": "Figure 5", "page": 8, "note": "파라미터 인코더와 GKI·RoPE 결합 구조" }
+      ]
+    },
+    {
+      "id": "c6",
+      "section": "method",
+      "question": "정상과 이상을 '비대칭'으로 학습한다는 건 무슨 뜻일까?",
+      "answer": "정상은 한 원형(prototype)으로 조밀하게 모으고, 이상은 흩어진 채 정상에서만 밀어낸다.",
+      "bridge": "마지막으로, 이렇게 얻은 표현을 어떤 목적함수로 다듬을지가 남는다.",
+      "items": [
+        { "kind": "claim", "text": "대칭 대조 손실은 모든 클래스가 똑같이 조밀하다고 가정한다", "evidence": ["p11-s25", "p11-s26"] },
+        { "kind": "claim", "text": "정상 쿼리는 표준 원형 교차 엔트로피로 군집을 조인다", "evidence": ["p11-s29"] },
+        { "kind": "claim", "text": "이상 쿼리에는 정상과 가까울수록 커지는 적응형 마진을 준다", "evidence": ["p12-s7", "p12-s10"] },
+        { "kind": "claim", "text": "추론은 가장 가까운 원형으로 분류해 임계값 조정이 없다", "evidence": ["p12-s32"] }
+      ]
+    },
+    {
+      "id": "c7",
+      "section": "setup",
+      "question": "무엇을, 무엇과 비교해 시험했나?",
+      "answer": "공개 로그 5종에서 시스템 간 전이 쌍을 만들고, 7개 기존 방법과 20-shot으로 비교했다.",
+      "bridge": "그렇다면 이 설계가 실제로 통하는지 확인해야 한다.",
+      "items": [
+        { "kind": "claim", "text": "HDFS·BGL·Thunderbird·Hadoop의 1→1 전이 6쌍을 평가했다", "evidence": ["p13-s8", "p16-s3"] },
+        { "kind": "claim", "text": "AIT-LDS v2.0의 두 기업 웹 로그로 기업 간 전이도 봤다", "evidence": ["p13-s23", "p13-s24"] },
+        { "kind": "claim", "text": "지원 집합은 클래스당 20개, 결과는 5회 평균이다", "evidence": ["p14-s17", "p14-s21"] },
+        { "kind": "claim", "text": "DeepLog·MetaLog·LogFormer 등 7개 방법과 비교했다", "evidence": ["p15-s5", "p15-s7", "p15-s12", "p15-s14"] },
+        { "kind": "claim", "text": "AUC를 임계값 영향이 없는 주 평가 기준으로 삼았다", "evidence": ["p16-s21", "p16-s22"] }
+      ]
+    },
+    {
+      "id": "c8",
+      "section": "results",
+      "question": "시스템이 크게 다를 때도 잘 통했나?",
+      "answer": "도메인 차이가 큰 HDFS↔BGL 전이에서 AUC가 가장 높았고, 음의 전이는 없었다.",
+      "bridge": "결과부터 보면, 가장 어려운 이종 시스템 전이에서 차이가 뚜렷했다.",
+      "items": [
+        { "kind": "claim", "text": "대부분의 전이 쌍에서 F1·AUC가 가장 높았다", "evidence": ["p16-s9"] },
+        { "kind": "claim", "text": "이종 전이 HDFS→BGL·BGL→HDFS에서 AUC 1위였다", "evidence": ["p16-s13", "p16-s14"] },
+        { "kind": "claim", "text": "평가한 모든 쌍에서 음의 전이(negative transfer)가 없었다", "evidence": ["p16-s28"] },
+        { "kind": "claim", "text": "단, 일부 쌍에서는 AUC는 1위지만 F1은 1위가 아니다", "evidence": ["p16-s17"] }
+      ],
+      "bigNumbers": [
+        { "value": "0.954", "label": "HDFS→BGL 전이 AUC", "evidence": ["p16-s14"] },
+        { "value": "0.963", "label": "BGL→HDFS 전이 AUC", "evidence": ["p16-s14"] }
+      ],
+      "figures": [
+        { "label": "Table 3", "page": 17, "note": "6개 전이 쌍 × 8개 방법의 AUC·Precision·Recall·F1" },
+        { "label": "Figure 7", "page": 18, "note": "HDFS→BGL 반복 실행 표준편차" }
+      ]
+    },
+    {
+      "id": "c9",
+      "section": "results",
+      "question": "공격이 섞인 실제 웹 서버 로그에서는?",
+      "answer": "기업 간 전이에서 F1·AUC가 모두 0.98을 넘었다.",
+      "bridge": "다음으로, 공격 유형이 다양한 실제 기업 로그에서도 확인했다.",
+      "items": [
+        { "kind": "claim", "text": "Russell Mitchell→Santos에서 MetaLog(F1 0.946)를 앞섰다", "evidence": ["p17-s41"] },
+        { "kind": "claim", "text": "반대 방향에서 Precision 0.997, Recall 0.991이었다", "evidence": ["p18-s4"] },
+        { "kind": "claim", "text": "이상 666건 중 놓친 것은 3건, 오탐은 정상 51건 중 2건이었다", "evidence": ["p18-s12"] },
+        { "kind": "claim", "text": "공격 유형 구분이 아닌 이진 탐지라 쉬운 과제였다고 밝힌다", "evidence": ["p18-s10", "p18-s11"] }
+      ],
+      "bigNumbers": [
+        { "value": "0.989", "label": "Russell Mitchell→Santos F1", "evidence": ["p17-s41"] },
+        { "value": "0.996", "label": "Russell Mitchell→Santos AUC", "evidence": ["p17-s41"] }
+      ],
+      "figures": [
+        { "label": "Table 4", "page": 20, "note": "AIT-LDS v2.0 기업 간 전이 성능 비교" },
+        { "label": "Figure 9", "page": 20, "note": "AIT-LDS v2.0 이진 혼동 행렬" }
+      ]
+    },
+    {
+      "id": "c10",
+      "section": "analysis",
+      "question": "어떤 구성요소가 성능을 만들었나?",
+      "answer": "RoPE를 빼면 F1이 가장 크게 떨어졌고, 적응형 마진과 게이트도 각각 기여했다.",
+      "bridge": "왜 이런 결과가 나왔는지는 구성요소를 하나씩 빼 보며 확인했다.",
+      "items": [
+        { "kind": "claim", "text": "어떤 핵심 모듈을 빼도 성능이 일관되게 떨어졌다", "evidence": ["p20-s14", "p20-s15"] },
+        { "kind": "claim", "text": "파라미터 통합을 빼면 Precision이 눈에 띄게 줄었다", "evidence": ["p20-s32"] },
+        { "kind": "claim", "text": "마진 없음·고정 마진 변형 모두 전체 모델보다 낮았다", "evidence": ["p21-s29"] },
+        { "kind": "claim", "text": "게이트 없는 더하기·이어붙이기 융합보다 GKI가 나았다", "evidence": ["p21-s32"] },
+        { "kind": "claim", "text": "APCL의 이상 분산은 대칭 SupCon보다 3.3–6.4배 컸다", "evidence": ["p17-s35"] }
+      ],
+      "bigNumbers": [
+        { "value": "0.890 → 0.772", "label": "RoPE 제거 시 HDFS→BGL F1", "evidence": ["p20-s30"] }
+      ],
+      "figures": [
+        { "label": "Table 5", "page": 21, "note": "구성요소별 제거 실험(ablation)" },
+        { "label": "Figure 8", "page": 19, "note": "학습 전후 t-SNE 임베딩 분포" }
+      ]
+    },
+    {
+      "id": "c11",
+      "section": "analysis",
+      "question": "몇 개의 샘플과 어떤 설정이 필요한가?",
+      "answer": "20개 정도면 충분했고, 온도(τ)는 낮을수록 좋았다. 추론 비용도 실용 범위다.",
+      "bridge": "그렇다면 실제로 쓰려면 라벨과 연산이 얼마나 필요할까?",
+      "items": [
+        { "kind": "claim", "text": "HDFS→BGL에서 K를 10→20으로 늘리면 F1이 약 0.89로 안정됐다", "evidence": ["p18-s16"] },
+        { "kind": "claim", "text": "τ ≤ 0.1에서 가장 좋고, 0.5에선 F1이 0.75–0.77로 떨어졌다", "evidence": ["p22-s12", "p22-s14"] },
+        { "kind": "claim", "text": "파라미터 수는 8.34M으로 비교 방법 중 가장 많다", "evidence": ["p23-s16", "p23-s18"] },
+        { "kind": "claim", "text": "배치 처리 시 초당 약 1,800개 윈도를 처리한다", "evidence": ["p23-s20"] }
+      ],
+      "figures": [
+        { "label": "Figure 10", "page": 21, "note": "K-shot 수에 따른 F1·AUC 변화" },
+        { "label": "Figure 11", "page": 22, "note": "온도 τ에 따른 F1·AUC 변화" },
+        { "label": "Table 6", "page": 23, "note": "학습 시간·추론 지연·메모리·파라미터 수 비교" }
+      ]
+    },
+    {
+      "id": "c12",
+      "section": "limits",
+      "question": "어디까지 믿어도 될까?",
+      "answer": "목표 시스템의 이상 라벨이 몇 개는 필요하고, 표준 벤치마크 위주라 현대 환경 검증은 남아 있다.",
+      "bridge": "그런데 결과가 좋은 만큼 전제 조건도 따져 봐야 한다.",
+      "items": [
+        { "kind": "claim", "text": "적응 시 목표 시스템의 이상 라벨이 최소 몇 개 필요하다", "evidence": ["p24-s6"] },
+        { "kind": "claim", "text": "소스 시스템이 이상을 충분히 포함한다고 가정한다", "evidence": ["p24-s6"] },
+        { "kind": "claim", "text": "표준 벤치마크가 현대 인프라 복잡성을 다 담지 못할 수 있다", "evidence": ["p24-s7"] },
+        { "kind": "claim", "text": "임계값이 없어 일부 이상을 정상으로 분류, Recall이 낮아진다", "evidence": ["p16-s18", "p16-s19", "p16-s20"] },
+        { "kind": "opinion", "text": "기준선은 원래 하이퍼파라미터 그대로라 비교가 다소 유리했을 수 있다", "evidence": ["p15-s15"] }
+      ]
+    },
+    {
+      "id": "c13",
+      "section": "implications",
+      "question": "다음에 무엇을 더 볼까?",
+      "answer": "이상 라벨 없이 적응하는 변형과 마이크로서비스·LLM 결합이 다음 과제다.",
+      "bridge": "그래서 남은 질문은 '라벨이 정말 0개일 때'와 '더 복잡한 환경'이다.",
+      "items": [
+        { "kind": "claim", "text": "다중 소스 메타 학습과 이상 0개 적응 변형을 계획한다", "evidence": ["p24-s8"] },
+        { "kind": "claim", "text": "온라인 스트림 학습·마이크로서비스 평가·LLM 결합을 예고했다", "evidence": ["p24-s9"] },
+        { "kind": "opinion", "text": "원문에서 더 볼 곳: 손실 정의(식 11–13)와 Table 5 ablation", "evidence": ["p12-s16", "p21-s4"] },
+        { "kind": "opinion", "text": "코드가 Zenodo에 공개되어 있어 재현 실험이 가능하다", "evidence": ["p15-s2"] }
+      ]
+    }
+  ],
+  "glossary": [
+    { "term": "로그 이상 탐지(log anomaly detection)", "definition": "시스템 로그에서 비정상 동작을 자동으로 찾는 일" },
+    { "term": "시스템 간 전이(cross-system transfer)", "definition": "한 시스템에서 배운 지식을 다른 시스템에 적용" },
+    { "term": "퓨샷 학습(few-shot learning)", "definition": "클래스당 몇 개의 라벨 예시만으로 학습·적응하는 방식" },
+    { "term": "메타 학습(meta-learning)", "definition": "여러 작은 과제로 '적응하는 법'을 배우는 학습" },
+    { "term": "원형(prototype)", "definition": "한 클래스 임베딩들의 평균 벡터, 분류 기준점" },
+    { "term": "대조 학습(contrastive learning)", "definition": "같은 건 가깝게, 다른 건 멀게 임베딩을 학습" },
+    { "term": "Drain", "definition": "로그를 템플릿과 변수로 나누는 대표적 로그 파서" },
+    { "term": "OOV(Out-Of-Vocabulary)", "definition": "학습 때 없던 단어가 새로 나타나는 문제" },
+    { "term": "RoPE(Rotary Position Embedding)", "definition": "벡터 회전으로 상대 위치를 attention에 반영" },
+    { "term": "AUC(ROC-AUC)", "definition": "임계값과 무관하게 두 클래스 구분 능력을 재는 지표" },
+    { "term": "ablation study", "definition": "구성요소를 하나씩 빼서 기여도를 확인하는 실험" }
+  ]
+}

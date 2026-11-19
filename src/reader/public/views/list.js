@@ -14,6 +14,7 @@ function paperCard(p) {
       el('span', { class: 'tile-count', text: p.cardsTotal > 0 ? `${p.cardsRead}/${p.cardsTotal} 카드 · ${progressPercent(p)}%` : '카드 없음' }),
     ),
     el('span', { class: p.hasDigest ? 'tag tag-ok' : 'tag tag-wait', text: p.hasDigest ? '요약 있음' : '요약 대기' }),
+    p.example ? el('span', { class: 'tag tag-example', title: '저장소에 포함된 공개 예제(CC BY) 논문', text: '예제' }) : null,
   );
 }
 

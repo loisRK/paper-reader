@@ -1,6 +1,11 @@
 import fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
+import { fileURLToPath } from 'node:url';
+
+// Bundled public examples (CC BY papers). Listed alongside own papers with `example: true`;
+// their reading progress is stored under outputDir so the repository stays untouched.
+export const EXAMPLES_DIR = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'examples');
 
 export const NAME_RE = /^[\w.\-]+$/;
 export const isSafeName = (s) => typeof s === 'string' && NAME_RE.test(s) && s !== '.' && s !== '..';
@@ -20,31 +25,44 @@ async function readOptional(file) {
   }
 }
 
-export async function listPaperBundles(outputDir) {
+async function bundleIds(dir) {
   let entries;
   try {
-    entries = await fs.readdir(outputDir, { withFileTypes: true });
+    entries = await fs.readdir(dir, { withFileTypes: true });
   } catch (err) {
     if (err.code === 'ENOENT') return [];
     throw err;
   }
+  return entries.filter((e) => e.isDirectory() && !e.name.startsWith('_') && isSafeName(e.name)).map((e) => e.name);
+}
+
+export async function listPaperBundles(outputDir, { examplesDir = EXAMPLES_DIR } = {}) {
+  const ids = new Set([...(await bundleIds(outputDir)), ...(await bundleIds(examplesDir))]);
   const out = [];
-  for (const e of entries) {
-    if (!e.isDirectory() || e.name.startsWith('_') || !isSafeName(e.name)) continue;
-    const bundle = await readPaper(outputDir, e.name);
+  for (const id of ids) {
+    const bundle = await readPaper(outputDir, id, { examplesDir });
     if (bundle) out.push(bundle);
   }
   return out.sort((a, b) => a.id.localeCompare(b.id));
 }
 
-// Returns null when the paper (source.json) does not exist or is unreadable.
-export async function readPaper(outputDir, id) {
-  const src = await readOptional(path.join(outputDir, id, 'source.json'));
+// Own papers in outputDir take precedence over an example with the same id.
+// Returns null when the paper (source.json) does not exist or is unreadable in either place.
+export async function readPaper(outputDir, id, { examplesDir = EXAMPLES_DIR } = {}) {
+  let dir = path.join(outputDir, id);
+  let example = false;
+  let src = await readOptional(path.join(dir, 'source.json'));
+  if (src.missing && examplesDir) {
+    dir = path.join(examplesDir, id);
+    example = true;
+    src = await readOptional(path.join(dir, 'source.json'));
+  }
   if (src.value === undefined) return null;
-  const dig = await readOptional(path.join(outputDir, id, 'digest.json'));
+  const dig = await readOptional(path.join(dir, 'digest.json'));
   const prog = await readOptional(path.join(outputDir, id, 'progress.json'));
   return {
     id,
+    example,
     source: src.value,
     rawDigest: dig.value ?? null,
     digestError: dig.error ?? null,
@@ -55,6 +73,7 @@ export async function readPaper(outputDir, id) {
 export async function writeProgress(outputDir, id, progress) {
   const dir = path.join(outputDir, id);
   const file = path.join(dir, 'progress.json');
+  await fs.mkdir(dir, { recursive: true });
   const tmp = `${file}.${process.pid}.${crypto.randomBytes(6).toString('hex')}.tmp`;
   await fs.writeFile(tmp, JSON.stringify(progress, null, 2));
   await fs.rename(tmp, file);

@@ -91,8 +91,9 @@ async function serveStatic(res, pathname) {
 }
 
 export function createServer(cfg, deps = {}) {
-  const { fetchImpl } = deps;
+  const { fetchImpl, examplesDir } = deps;
   const out = cfg.outputDir;
+  const opts = { examplesDir };
 
   async function route(req, res) {
     const port = server.address()?.port;
@@ -109,12 +110,13 @@ export function createServer(cfg, deps = {}) {
     }
 
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
-      const list = (await listPaperBundles(out)).map((b) => {
+      const list = (await listPaperBundles(out, opts)).map((b) => {
         const { digest } = validated(b);
         const cards = digest?.cards ?? [];
         const ids = new Set(cards.map((c) => c.id));
         return {
           id: b.id,
+          example: b.example,
           title: b.source.meta?.title ?? b.id,
           journal: b.source.meta?.journal ?? '',
           date: b.source.meta?.date ?? '',
@@ -128,7 +130,7 @@ export function createServer(cfg, deps = {}) {
 
     if (parts[1] === 'papers' && parts.length === 3 && method === 'GET') {
       const id = checkName(parts[2], 'id');
-      const b = await readPaper(out, id);
+      const b = await readPaper(out, id, opts);
       if (!b) throw new HttpError(404, '논문을 찾을 수 없습니다.');
       const { digest, problems } = validated(b);
       const z = b.source.zotero ?? {};
@@ -145,7 +147,7 @@ export function createServer(cfg, deps = {}) {
       const id = checkName(parts[2], 'id');
       const body = await readBody(req);
       if (!validProgress(body)) throw new HttpError(400, 'progress 형식이 올바르지 않습니다: { read: string[], mode: "3min"|"10min", focus: boolean }');
-      if (!(await readPaper(out, id))) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+      if (!(await readPaper(out, id, opts))) throw new HttpError(404, '논문을 찾을 수 없습니다.');
       await writeProgress(out, id, { read: body.read, mode: body.mode, focus: body.focus });
       res.writeHead(204);
       return res.end();
