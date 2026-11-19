@@ -47,8 +47,17 @@ NARROW_CAPTION_SHARE = 0.6      # captions narrower than this share of the page 
 MAX_CHAIN_GAP = 24              # vertical gap that still links graphic parts (and a figure to its caption)
 MAX_TABLE_CAPTION_GAP = 48      # tables often have an unruled header row between caption and first rule
 FULL_WIDTH_SPILL_SHARE = 0.15   # a graphic this far past the caption's column may be full-width
-BODY_MIN_CHARS = 40             # body text (vs. labels inside a figure): long, wide, body-sized
-BODY_MIN_COLUMN_SHARE = 0.5
+BODY_MIN_CHARS = 40             # body text (vs. labels inside a figure): long and body-sized
+HEADER_MAX_SHARE = 0.1          # a running header/footer block ends within this share of the page
+ZONE_GAP = 4                    # header/footer rules sit this close to their text
+CAPTION_ALIGN = 3               # caption lines share the left edge (or the center) within this
+CAPTION_LINE_GAP = 4            # a caption continuation block starts this close below the caption
+RULE_MAX_THICKNESS = 1.5        # a horizontal rule (table line) is this thin ...
+RULE_MIN_LENGTH = 40            # ... and at least this long
+RULE_X_TOLERANCE = 6            # rules of one table start and end at the same x
+RULE_STACK_GAP = 48             # and follow each other this closely
+LABEL_GAP = 4                   # small text this close to a graphic region is its label
+WHITE = 0.98                    # fill components at or above this are white (invisible background)
 TABLE_COVER_SHARE = 0.8         # drawing and detected table this much overlapping (of the smaller): table-like
 PADDING = 4
 FIGURE_DPI = 150
@@ -262,6 +271,10 @@ def _pdf_rects(rects, to_pdf):
 # tables come back from PyMuPDF in that same space, verified on 2.1 for 0/90/270 and cropboxes).
 # Rendering maps the region through page.rotation_matrix, so a rotated page gets an image as it
 # is displayed.
+#
+# Per page: every caption picks a side (tables below first, figures above first) and "seeds" with
+# the graphics right next to it; a graphic seeds only its nearest caption. Seeds grow by chaining
+# nearby graphics in the caption's column; other captions, their seeds and body text are barriers.
 
 
 def _area(r):
@@ -276,51 +289,73 @@ def _v_overlap(a, b):
     return min(a[3], b[3]) - max(a[1], b[1])
 
 
+def _intersects(a, b):
+    return _h_overlap(a, b) > 0 and _v_overlap(a, b) > 0
+
+
 def _inside(inner, outer, tol=1.0):
     return (inner[0] >= outer[0] - tol and inner[1] >= outer[1] - tol
             and inner[2] <= outer[2] + tol and inner[3] <= outer[3] + tol)
 
 
-def _in_band(r, top, bottom):
-    return r[3] <= top or r[1] >= bottom
+def _union(a, b):
+    return (min(a[0], b[0]), min(a[1], b[1]), max(a[2], b[2]), max(a[3], b[3]))
 
 
-def _candidates(page, w, h, with_tables):
-    """Graphic element bboxes: images, drawing clusters (area >= MIN_CLUSTER_AREA), tables.
-
-    Returns (figure_like, table_like): find_tables() boxes and the drawings/images that mostly
-    overlap one are table-like, everything else figure-like."""
+def _page_zones(blocks, h):
+    """(top, bottom): graphics and regions stay between the running header and footer text."""
     top, bottom = h * MARGIN_BAND, h * (1 - MARGIN_BAND)
+    for b in blocks:
+        _, y0, _, y1 = b["bbox"]
+        if y0 < h * MARGIN_BAND and y1 <= h * HEADER_MAX_SHARE:
+            top = max(top, y1 + ZONE_GAP)          # the header's rule usually sits just below it
+        if y1 > h * (1 - MARGIN_BAND) and y0 >= h * (1 - HEADER_MAX_SHARE):
+            bottom = min(bottom, y0 - ZONE_GAP)
+    return top, bottom
+
+
+def _visible(d):
+    """Invisible white-filled boxes (figure backgrounds, often far larger than the figure) are skipped."""
+    kind = d.get("type") or ""
+    stroked = "s" in kind and d.get("color") is not None
+    fill = d.get("fill")
+    filled = "f" in kind and fill is not None and not all(c >= WHITE for c in fill)
+    return stroked or filled
+
+
+def _candidates(page, w, h, top, bottom, with_tables, captions=()):
+    """Graphic element bboxes: images, clusters of visible drawings (area >= MIN_CLUSTER_AREA), tables.
+
+    Returns (figure_like, table_like): find_tables() boxes and the clusters/images that mostly
+    overlap one are table-like, everything else figure-like."""
     page_area = w * h
 
     def usable(r):
-        r = (max(0.0, r[0]), max(0.0, r[1]), min(w, r[2]), min(h, r[3]))
-        if r[0] > r[2] or r[1] > r[3]:  # zero-thickness rules are fine, off-page is not
+        r = (max(0.0, r[0]), max(top, r[1]), min(w, r[2]), min(bottom, r[3]))
+        if r[0] > r[2] or r[1] > r[3]:  # zero-thickness rules are fine, off-page/header-only is not
             return None
-        if _area(r) > page_area * MAX_CANDIDATE_PAGE_SHARE or _in_band(r, top, bottom):
+        if _area(r) > page_area * MAX_CANDIDATE_PAGE_SHARE:
             return None
         return r
 
-    out = []
+    out = []  # images and drawing clusters
     for info in page.get_image_info():
         r = usable(tuple(info["bbox"]))
         if r and _area(r) > 0:
             out.append(r)
-    # Header/footer rules and page-sized backgrounds would glue clusters together: drop them first.
-    drawings = [d for d in page.get_drawings() if usable(tuple(d["rect"])) is not None]
+    drawings = [d for d in page.get_drawings() if _visible(d) and usable(tuple(d["rect"])) is not None]
     if drawings:
         for c in page.cluster_drawings(drawings=drawings):
             r = usable(tuple(c))
             if r and _area(r) >= MIN_CLUSTER_AREA:
                 out.append(r)
+    tables = []
     if with_tables:
         try:
-            tables = page.find_tables().tables
+            found = page.find_tables().tables
         except Exception:  # noqa: BLE001 - table detection is best effort
-            tables = []
-        tables = [r for r in (usable(tuple(t.bbox)) for t in tables) if r and _area(r) > 0]
-    else:
-        tables = []
+            found = []
+        tables = [r for r in (usable(tuple(t.bbox)) for t in found) if r and _area(r) > 0]
 
     def in_table(r):
         # find_tables() boxes may be tighter than the ruled grid, so "mostly inside" works both ways
@@ -330,24 +365,73 @@ def _candidates(page, w, h, with_tables):
                    >= min(a, _area(t)) * TABLE_COVER_SHARE for t in tables)
 
     figure_like = [r for r in out if not in_table(r)]
-    table_like = tables + [r for r in out if in_table(r)]
+    table_like = tables + [r for r in out if in_table(r)] + _rule_stacks(drawings, captions)
     return figure_like, table_like
 
 
-def _is_body_text(blk, col_w, body_size):
-    x0, _, x1, _ = blk["bbox"]
-    return (blk["btype"] == "paragraph" and len(blk["text"]) >= BODY_MIN_CHARS
-            and x1 - x0 >= col_w * BODY_MIN_COLUMN_SHARE and blk["size"] >= body_size - 0.5)
+def _rule_stacks(drawings, captions=()):
+    """Booktabs-style tables: two or more horizontal rules with the same x-extent stacked closely
+    (with no caption between them). find_tables() misses them when there are only three rules and
+    no vertical lines."""
+    rules = sorted((tuple(d["rect"]) for d in drawings
+                    if d["rect"].height <= RULE_MAX_THICKNESS and d["rect"].width >= RULE_MIN_LENGTH),
+                   key=lambda r: r[1])
+    stacks = []  # [x0, y0, x1, y1, count]
+    for r in rules:
+        for st in stacks:
+            if (abs(r[0] - st[0]) <= RULE_X_TOLERANCE and abs(r[2] - st[2]) <= RULE_X_TOLERANCE
+                    and 0 <= r[1] - st[3] <= RULE_STACK_GAP
+                    and not any(_intersects(c, (st[0], st[3], st[2], r[1])) for c in captions)):
+                st[0], st[2], st[3], st[4] = min(st[0], r[0]), max(st[2], r[2]), r[3], st[4] + 1
+                break
+        else:
+            stacks.append([r[0], r[1], r[2], r[3], 1])
+    return [tuple(st[:4]) for st in stacks if st[4] >= 2]
 
 
-def _clip_to_side(c, cb, direction, rng):
-    """Candidate c cut to the column range rng and to the caption's side, or None if it has no part there."""
-    if _h_overlap(c, (rng[0], 0, rng[1], 0)) <= 0:
+def _is_body_text(blk, body_size):
+    """Running text (not a label inside a figure): a body-sized heading or a long body-sized paragraph."""
+    if blk["size"] < body_size - 0.5:
+        return False
+    return blk["btype"] == "heading" or (blk["btype"] == "paragraph" and len(blk["text"]) >= BODY_MIN_CHARS)
+
+
+def _line_boxes(cmap):
+    by_line = {}
+    for li, bbox in cmap:
+        if bbox is not None:
+            by_line[li] = bbox if li not in by_line else _union(by_line[li], bbox)
+    return [tuple(by_line[li]) for li in sorted(by_line)]
+
+
+def _caption_extent(cap, blocks):
+    """Bbox of the caption's lines, including continuation lines MuPDF put into following blocks,
+    but not sub-figure labels ("(a) Detection Task") it merged in: a caption line starts at the
+    caption's left edge or is centered under it, and follows the previous line closely."""
+    lines = list(cap["lines"])
+    i = next(k for k, b in enumerate(blocks) if b is cap)
+    for b in blocks[i + 1:]:
+        if b["btype"] != "paragraph" or abs(b["size"] - cap["size"]) > 0.5:
+            break
+        lines += b["lines"]
+    bb = lines[0]
+    for ln in lines[1:]:
+        aligned = (abs(ln[0] - bb[0]) <= CAPTION_ALIGN
+                   or abs((ln[0] + ln[2]) / 2 - (bb[0] + bb[2]) / 2) <= CAPTION_ALIGN)
+        if not aligned or ln[1] - bb[3] > CAPTION_LINE_GAP or ln[1] < bb[1]:
+            break
+        bb = _union(bb, ln)
+    return bb
+
+
+def _clip_to_side(c, cb, direction, col):
+    """Candidate c cut to the column band and to the caption's side, or None if it has no part there."""
+    if _h_overlap(c, (col[0], 0, col[1], 0)) <= 0:
         return None
     if direction == "up" and c[1] < cb[1]:
-        return (max(c[0], rng[0]), c[1], min(c[2], rng[1]), min(c[3], cb[1]))
+        return (max(c[0], col[0]), c[1], min(c[2], col[1]), min(c[3], cb[1]))
     if direction == "down" and c[3] > cb[3]:
-        return (max(c[0], rng[0]), max(c[1], cb[3]), min(c[2], rng[1]), c[3])
+        return (max(c[0], col[0]), max(c[1], cb[3]), min(c[2], col[1]), c[3])
     return None
 
 
@@ -355,106 +439,168 @@ def _caption_gap(c, cb, direction):
     return cb[1] - c[3] if direction == "up" else c[1] - cb[3]
 
 
-def _keeps_full_width(cap, direction, first_gap, col, cands, blocks, w, body_size):
-    """Narrow caption under a full-width graphic: true when the graphic next to the caption spills
-    well past the caption's column, no body text of the other column shares its vertical band and
-    no other caption in the other column sits next to it."""
-    cb, half = cap["bbox"], w / 2
+def _caption_strip(c, cb, direction):
+    """The area between the caption and a graphic on its side."""
+    return (c[0], c[3], c[2], cb[1]) if direction == "up" else (c[0], cb[3], c[2], c[1])
+
+
+def _keeps_full_width(cap, cb, direction, col, seeds, blocks, caption_boxes, w, first_gap):
+    """Narrow caption next to a full-width graphic: true when a seed graphic spills well past the
+    caption's column, every text block of the other column beside it lies inside that graphic and
+    no other caption sits in the other column next to it."""
+    half = w / 2
     other = (half, w) if col[0] == 0 else (0.0, half)
-    for c in cands:
-        side = _clip_to_side(c, cb, direction, col)
-        if side is None or _caption_gap(side, cb, direction) > first_gap:
-            continue
+    for c in seeds:
         spill = c[2] - col[1] if col[0] == 0 else col[0] - c[0]
         if spill < w * FULL_WIDTH_SPILL_SHARE:
             continue
         reach = (c[0], c[1] - first_gap, c[2], c[3] + first_gap)
-        crowded = any(
-            b is not cap and b["bbox"][0] >= other[0] - 1 and b["bbox"][2] <= other[1] + 1
-            and ((_is_body_text(b, half, body_size) and _v_overlap(b["bbox"], c) > 0)
-                 # a sibling caption in the other column: two side-by-side figures share the graphic
-                 or (b["btype"] == "caption" and _v_overlap(b["bbox"], reach) > 0))
-            for b in blocks)
+
+        def in_other(r):
+            return other[0] <= (r[0] + r[2]) / 2 <= other[1]
+
+        crowded = any(b is not cap and in_other(b["bbox"]) and _v_overlap(b["bbox"], c) > 0
+                      and not _inside(b["bbox"], c, 2) for b in blocks)
+        crowded = crowded or any(r != cb and in_other(r) and _v_overlap(r, reach) > 0 for r in caption_boxes)
         if not crowded:
             return True
     return False
 
 
-def _figure_region(cap, is_table, cands, blocks, w, h, body_size):
-    """Return the region (x0, y0, x1, y1) for the caption block `cap`, or None."""
-    cb = cap["bbox"]
+def _plan(cap, cb, is_table, figure_like, table_like, blocks, caption_boxes, body, w):
+    """Choose column band, side and seed graphics for one caption. Returns a dict or None."""
     half = w / 2
     narrow = cb[2] - cb[0] < w * NARROW_CAPTION_SHARE
-    if narrow:
-        col = (0.0, half) if (cb[0] + cb[2]) / 2 < half else (half, w)
-    else:
-        col = (0.0, w)
+    col = ((0.0, half) if (cb[0] + cb[2]) / 2 < half else (half, w)) if narrow else (0.0, w)
     first_gap = MAX_TABLE_CAPTION_GAP if is_table else MAX_CHAIN_GAP
-
-    def side_cands(direction):
-        out = (_clip_to_side(c, cb, direction, col) for c in cands)
-        return [c for c in out if c is not None]
-
     order = ("down", "up") if is_table else ("up", "down")
-    direction = next((d for d in order
-                      if any(_caption_gap(c, cb, d) <= first_gap for c in side_cands(d))), None)
-    if direction is None:
-        return None
-    if narrow and _keeps_full_width(cap, direction, first_gap, col, cands, blocks, w, body_size):
-        col = (0.0, w)
+    own = table_like if is_table else figure_like
 
-    pool = side_cands(direction)
-    body = [b for b in blocks if b is not cap and _is_body_text(b, half, body_size)
-            and _h_overlap(b["bbox"], (col[0], 0, col[1], 0)) > 0]
-
-    def blocked(lo, hi):
-        """Body text inside the vertical gap (lo, hi) stops the chain."""
-        return any(b["bbox"][1] >= lo - 1 and b["bbox"][3] <= hi + 1 for b in body)
-
-    region = None
-    while True:
-        best = None
+    def seeds_for(pool, direction, band):
+        out = []
         for c in pool:
-            if region is None:
-                g = _caption_gap(c, cb, direction)
-                lo, hi = (c[3], cb[1]) if direction == "up" else (cb[3], c[1])
-                limit = first_gap
-            else:
-                g = max(c[1] - region[3], region[1] - c[3])
-                lo, hi = (c[3], region[1]) if c[3] <= region[1] else (region[3], c[1])
-                limit = MAX_CHAIN_GAP
-            if g <= limit and not (g > 0 and blocked(lo, hi)):
-                best = c
-                break
-        if best is None:
-            break
-        pool.remove(best)
-        region = best if region is None else (min(region[0], best[0]), min(region[1], best[1]),
-                                              max(region[2], best[2]), max(region[3], best[3]))
-    if region is None:
-        return None
+            side = _clip_to_side(c, cb, direction, band)
+            if side is None:
+                continue
+            g = _caption_gap(side, cb, direction)
+            if g > first_gap:
+                continue
+            if g > 0 and any(_intersects(_caption_strip(side, cb, direction), b["bbox"]) for b in body):
+                continue
+            out.append((c, side, g))
+        return out
 
-    # Padding; whatever lies between the graphic and its caption (axis labels, a table's header row)
-    # belongs to it, the caption itself does not.
+    # Own kind first, so a table right above a figure (or below a table caption) is not merged in.
+    for pool in (own, figure_like + table_like):
+        for direction in order:
+            seeds = seeds_for(pool, direction, col)
+            if seeds:
+                if narrow and _keeps_full_width(cap, cb, direction, col, [c for c, _, _ in seeds], blocks,
+                                                caption_boxes, w, first_gap):
+                    col = (0.0, w)
+                    seeds = seeds_for(pool, direction, col)
+                return {"cb": cb, "col": col, "narrow": col != (0.0, w), "direction": direction,
+                        "pool": pool, "seeds": seeds}
+    return None
+
+
+def _grow(plan, barriers, taken, body):
+    cb, col, direction = plan["cb"], plan["col"], plan["direction"]
+    region = None
+    for _, side, _ in plan["seeds"]:
+        region = side if region is None else _union(region, side)
+    used = {c for c, _, _ in plan["seeds"]}
+    grown = True
+    while grown:
+        grown = False
+        for c in plan["pool"]:
+            if c in used:
+                continue
+            side = _clip_to_side(c, cb, direction, col)
+            if side is None or side in taken:
+                continue
+            if max(side[1] - region[3], region[1] - side[3]) > MAX_CHAIN_GAP:
+                continue
+            merged = _union(region, side)
+            if any(_intersects(merged, r) for r in barriers) or any(_intersects(merged, b["bbox"]) for b in body):
+                continue
+            region, grown = merged, True
+            used.add(c)
+    return region
+
+
+def _add_labels(region, plan, cap, blocks, caption_boxes, body, top, bottom):
+    """Grow the region over small text touching it (axis labels, legends) on the caption's side."""
+    cb, col, direction = plan["cb"], plan["col"], plan["direction"]
+    body_ids = {id(b) for b in body}
+    others = [r for r in caption_boxes if r != cb]
+    grown = True
+    while grown:
+        grown = False
+        for b in blocks:
+            bb = b["bbox"]
+            if (b is cap or b["btype"] == "caption" or id(b) in body_ids or _inside(bb, region)
+                    or not (col[0] <= (bb[0] + bb[2]) / 2 <= col[1])
+                    or bb[1] < top or bb[3] > bottom
+                    or (direction == "up" and (bb[1] + bb[3]) / 2 > cb[1])
+                    or (direction == "down" and (bb[1] + bb[3]) / 2 < cb[3])):
+                continue
+            near = (region[0] - LABEL_GAP, region[1] - LABEL_GAP, region[2] + LABEL_GAP, region[3] + LABEL_GAP)
+            if not _intersects(bb, near):
+                continue
+            merged = _union(region, bb)
+            if any(_intersects(merged, r) for r in others):
+                continue
+            region, grown = merged, True
+    return region
+
+
+def _finish(region, plan, cap, blocks, caption_boxes, body, top, bottom, w, h):
+    """Padding, then clip to the caption edge, the column, header/footer, other captions and text."""
+    cb, col, direction = plan["cb"], plan["col"], plan["direction"]
     x0, y0, x1, y1 = (max(0.0, region[0] - PADDING), max(0.0, region[1] - PADDING),
                       min(w, region[2] + PADDING), min(h, region[3] + PADDING))
+    if plan["narrow"]:
+        x0, x1 = max(x0, col[0]), min(x1, col[1])
+    # whatever lies between the graphic and its caption (axis labels, a header row) belongs to it
     if direction == "up":
         y1 = cb[1]
     else:
         y0 = cb[3]
+    y0, y1 = max(y0, top), min(y1, bottom)
     region = (x0, y0, x1, y1)
-
-    # Header/footer blocks and other captions stay outside.
-    top, bottom = h * MARGIN_BAND, h * (1 - MARGIN_BAND)
+    region = _add_labels(region, plan, cap, blocks, caption_boxes, body, top, bottom)
+    if direction == "up":    # labels may not pull the region across the caption
+        region = (region[0], region[1], region[2], min(region[3], cb[1]))
+    else:
+        region = (region[0], max(region[1], cb[3]), region[2], region[3])
+    own_center = (cb[1] + cb[3]) / 2
+    for r in caption_boxes:
+        if r == cb or not _intersects(r, region):
+            continue
+        if (r[1] + r[3]) / 2 < own_center:
+            region = (region[0], max(region[1], r[3]), region[2], region[3])
+        else:
+            region = (region[0], region[1], region[2], min(region[3], r[1]))
+    body_ids = {id(b) for b in body}
     for b in blocks:
         bb = b["bbox"]
-        if b is cap or _h_overlap(bb, region) <= 0 or _v_overlap(bb, region) <= 0:
+        if b is cap or not _intersects(bb, region) or _inside(bb, region):
             continue
-        if bb[3] <= top or (b["btype"] == "caption" and (bb[1] + bb[3]) / 2 < (cb[1] + cb[3]) / 2):
-            region = (region[0], max(region[1], bb[3]), region[2], region[3])
-        elif bb[1] >= bottom or b["btype"] == "caption":
-            region = (region[0], region[1], region[2], min(region[3], bb[1]))
-    if region[1] >= region[3] or _area(region) < MIN_FIGURE_AREA:
+        cx, cy = (bb[0] + bb[2]) / 2, (bb[1] + bb[3]) / 2
+        outside_col = not (col[0] <= cx <= col[1])
+        is_body = id(b) in body_ids
+        if outside_col or (is_body and not (region[0] <= cx <= region[2])):
+            if cx < (region[0] + region[2]) / 2:
+                region = (max(region[0], bb[2] + 1), region[1], region[2], region[3])
+            else:
+                region = (region[0], region[1], min(region[2], bb[0] - 1), region[3])
+        elif is_body:
+            if cy < (region[1] + region[3]) / 2:
+                region = (region[0], max(region[1], bb[3] + 1), region[2], region[3])
+            else:
+                region = (region[0], region[1], region[2], min(region[3], bb[1] - 1))
+    if region[0] >= region[2] or region[1] >= region[3] or _area(region) < MIN_FIGURE_AREA:
         return None
     return region
 
@@ -478,28 +624,53 @@ def _detect_figures(doc, figures, page_infos, body_size, figures_dir):
 
 def _detect_page_figures(page, pno, figs, page_info, body_size, figures_dir):
     w, h, blocks = page_info
-    figure_like, table_like = _candidates(page, w, h, any(f["label"].startswith("Table") for f in figs))
+    top, bottom = _page_zones(blocks, h)
+    figure_like, table_like = _candidates(page, w, h, top, bottom,
+                                          any(f["label"].startswith("Table") for f in figs),
+                                          [b["bbox"] for b in blocks if b["btype"] == "caption"])
     if not figure_like and not table_like:
         return
-    by_sid = {b["sids"][0]: b for b in blocks if b.get("sids")}
-    for n, fig in enumerate(figs, start=1):
+    graphics = figure_like + table_like
+    # body text that is not drawn inside a graphic (e.g. table rows inside their rules)
+    body = [b for b in blocks if _is_body_text(b, body_size)
+            and not any(_inside(b["bbox"], c, 2) for c in graphics)]
+    caps = [b for b in blocks if b["btype"] == "caption"]
+    extent = {id(b): _caption_extent(b, blocks) for b in caps}
+    caption_boxes = list(extent.values())
+    by_sid = {b["sids"][0]: b for b in blocks}
+
+    plans = []
+    for fig in figs:
         cap = by_sid[fig["captionSentenceId"]]
-        is_table = fig["label"].startswith("Table")
-        # Own kind first, so a table right above a figure (or below a table caption) is not merged in.
-        own = table_like if is_table else figure_like
-        region = _figure_region(cap, is_table, own, blocks, w, h, body_size)
-        if region is None:
-            region = _figure_region(cap, is_table, figure_like + table_like, blocks, w, h, body_size)
+        plans.append(_plan(cap, extent[id(cap)], fig["label"].startswith("Table"), figure_like, table_like,
+                           blocks, caption_boxes, body, w))
+    # A graphic (its part in the caption's column band) seeds only its nearest caption.
+    nearest = {}
+    for k, plan in enumerate(plans):
+        for _, side, g in plan["seeds"] if plan else ():
+            if side not in nearest or g < nearest[side][0]:
+                nearest[side] = (g, k)
+    for k, plan in enumerate(plans):
+        if plan:
+            plan["seeds"] = [sd for sd in plan["seeds"] if nearest[sd[1]][1] == k]
+
+    for k, (fig, plan) in enumerate(zip(figs, plans)):
+        if not plan or not plan["seeds"]:
+            continue
+        cap = by_sid[fig["captionSentenceId"]]
+        taken = {side for j, p in enumerate(plans) if p and j != k for _, side, _ in p["seeds"]}
+        barriers = [r for r in caption_boxes if r != plan["cb"]] + list(taken)
+        region = _grow(plan, barriers, taken, body)
+        region = _finish(region, plan, cap, blocks, caption_boxes, body, top, bottom, w, h)
         if region is None:
             continue
         fig["bbox"] = [_r1(v) for v in region]
         for b in blocks:
-            if (b["btype"] == "paragraph" and b.get("block") is not None
-                    and "inFigure" not in b["block"] and _inside(b["bbox"], region)):
+            if b["btype"] == "paragraph" and "inFigure" not in b["block"] and _inside(b["bbox"], region):
                 b["block"]["inFigure"] = fig["label"]
                 fig["blockIds"].append(b["block"]["id"])
         if figures_dir:
-            name = f"fig-{pno}-{n}.png"
+            name = f"fig-{pno}-{k + 1}.png"
             clip = pymupdf.Rect(region) * page.rotation_matrix
             page.get_pixmap(clip=clip, dpi=FIGURE_DPI).save(os.path.join(figures_dir, name))
             fig["image"] = name
@@ -587,7 +758,7 @@ def _extract(doc, figures_dir=None, detect_figures=True):
             block = {"id": bid, "type": btype, "page": pno, "sentenceIds": sids}
             blocks.append(block)
             infos.append({"bbox": tuple(item["bbox"]), "btype": btype, "text": text, "size": item["size"],
-                          "sids": sids, "block": block})
+                          "lines": _line_boxes(item["cmap"]), "sids": sids, "block": block})
             if btype == "caption":
                 label = f"{'Table' if cap.group(1) == 'Table' else 'Figure'} {cap.group(2)}"
                 if label not in seen_labels:

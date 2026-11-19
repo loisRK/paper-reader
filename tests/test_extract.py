@@ -622,3 +622,114 @@ def test_figure_detection_error_keeps_text_and_leaves_figures_empty(tmp_path, mo
     assert all(f["bbox"] is None and f["image"] is None and f["blockIds"] == [] for f in result["figures"])
     assert not any("inFigure" in b for b in result["blocks"])
     assert "그림 영역을 찾지 못했습니다" in capsys.readouterr().err
+
+
+CODE = "1 from lib import thing 2 def run(self): 3 return thing.go() 4 # more code here 5 done"
+
+
+def _booktabs(page, x0, x1, ys, rows):
+    """Horizontal rules only (no verticals), one text row per gap."""
+    for y in ys:
+        page.draw_line((x0, y), (x1, y), width=0.6)
+    for i, text in enumerate(rows):
+        page.insert_text((x0 + 4, ys[0] + 12 + 14 * i), text, fontsize=8, fontname="helv")
+
+
+def _new_page(doc):
+    page = doc.new_page(width=612, height=792)
+    page.insert_text((124, 54), "Paper Title: A Running Header Line", fontsize=9, fontname="helv")  # ends past 7%
+    page.draw_line((55, 60), (557, 60), width=1)                               # header rule
+    return page
+
+
+def _save(doc, path):
+    doc.save(str(path))
+    doc.close()
+    return extract(str(path))
+
+
+def test_header_text_and_rule_above_a_figure_stay_outside(tmp_path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    page.draw_rect(pymupdf.Rect(30, 20, 360, 200), color=None, fill=(1, 1, 1))  # invisible background
+    page.draw_rect(pymupdf.Rect(70, 66, 250, 150), fill=(1, 0, 0))
+    _box(page, (55, 156, 290, 174), "Figure 1. Under the header.", 9)
+    for y in (190, 305, 420):
+        _box(page, (55, y, 290, y + 100), FILLER + " " + FILLER, 9)
+        _box(page, (330, y - 120, 560, y - 20), BODY, 9)
+    result = _save(doc, tmp_path / "hdr.pdf")
+    x0, y0, x1, y1 = _figure(result, "Figure 1")["bbox"]
+    header = _block_with(result, "Paper Title: A Running Header Line")
+    assert y0 >= result["sentences"][header["sentenceIds"][0]]["rects"][0][3]
+    assert y0 > 60                     # below the header rule
+    assert x0 >= 55 and x1 <= 306      # the invisible background does not widen it
+
+
+def test_code_in_the_other_column_beside_a_narrow_caption_figure_is_cut_off(tmp_path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    page.draw_rect(pymupdf.Rect(37, 64, 540, 260), color=None, fill=(1, 1, 1))  # invisible, spans both
+    page.draw_rect(pymupdf.Rect(90, 70, 250, 150), fill=(0, 0, 1))
+    _box(page, (55, 156, 290, 174), "Figure 4. A tree.", 9)
+    _box(page, (301, 70, 540, 160), CODE + " " + CODE, 7)                    # code starts left of center
+    for y in (190, 305, 420):
+        _box(page, (55, y, 290, y + 100), FILLER + " " + FILLER, 9)
+        _box(page, (330, y, 560, y + 100), BODY, 9)
+    result = _save(doc, tmp_path / "code.pdf")
+    fig = _figure(result, "Figure 4")
+    assert fig["bbox"][2] < 301
+    code = next(b for b in result["blocks"] if result["sentences"][b["sentenceIds"][0]]["text"].startswith("1 from"))
+    assert code["id"] not in fig["blockIds"]
+
+
+def test_multi_line_caption_above_a_table_is_not_in_the_image(tmp_path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    _box(page, (55, 66, 290, 84), "Table 3. Overall performance of agents.", 9)
+    _box(page, (55, 79, 290, 111), "We show the lines of code to register the agent and the average time.", 9)
+    _booktabs(page, 57, 288, (122, 134, 174), ["Agent LoC Time", "A 41 28.6", "B 49 43.7"])
+    for y in (190, 305, 420):
+        _box(page, (55, y, 290, y + 100), FILLER + " " + FILLER, 9)
+        _box(page, (330, y - 120, 560, y - 20), BODY, 9)
+    result = _save(doc, tmp_path / "mcap.pdf")
+    table = _figure(result, "Table 3")
+    cont = _block_with(result, "We show the lines of code to register the agent and the average time.")
+    cont_bottom = max(r[3] for s in cont["sentenceIds"] for r in result["sentences"][s]["rects"])
+    assert table["bbox"][1] >= cont_bottom - 1
+    assert table["bbox"][3] >= 174
+    assert cont["id"] not in table["blockIds"]
+
+
+def test_stacked_table_and_figure_captions_in_one_column_split_the_graphics(tmp_path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    _box(page, (94, 262, 251, 280), "Table 5. Occurrences.", 9)
+    _booktabs(page, 58, 284, (282, 296, 325), ["Agent find echo", "REACT 0 0"])
+    page.draw_rect(pymupdf.Rect(70, 335, 280, 470), fill=(0, 1, 0))          # 10pt below the table
+    _box(page, (55, 476, 280, 494), "Figure 6. Actions taken.", 9)
+    for y in (70, 160):
+        _box(page, (55, y, 290, y + 80), FILLER + " " + FILLER, 9)
+    for y in (70, 185, 300, 415):
+        _box(page, (330, y, 560, y + 100), BODY, 9)
+    result = _save(doc, tmp_path / "stack.pdf")
+    t5, f6 = _figure(result, "Table 5")["bbox"], _figure(result, "Figure 6")["bbox"]
+    assert t5[1] >= 270 and t5[3] >= 325 and t5[3] <= 335
+    assert f6[1] >= 325 and f6[3] <= 476 and f6[1] <= 335
+
+
+def test_full_width_table_above_a_right_column_figure_stays_out_of_it(tmp_path):
+    doc = pymupdf.open()
+    page = _new_page(doc)
+    _box(page, (55, 66, 545, 96), "Table 4. Agent performance by task. This table summarizes the results of "
+         "every agent across detection, localization, RCA and mitigation.", 9)
+    _booktabs(page, 55, 289, (104, 116, 150), ["Agent Acc", "A 69%", "B 23%"])
+    _booktabs(page, 308, 541, (104, 116, 150), ["Agent Acc", "C 61%", "D 30%"])
+    page.draw_rect(pymupdf.Rect(330, 165, 520, 270), fill=(1, 0.5, 0))      # 15pt below the table
+    _box(page, (321, 276, 528, 294), "Figure 7. Action distribution.", 9)
+    for y in (170, 285, 400):
+        _box(page, (55, y, 290, y + 100), FILLER + " " + FILLER, 9)
+    _box(page, (330, 310, 560, 410), BODY, 9)
+    result = _save(doc, tmp_path / "fw.pdf")
+    t4, f7 = _figure(result, "Table 4")["bbox"], _figure(result, "Figure 7")["bbox"]
+    assert t4[0] <= 55 and t4[2] >= 541 and t4[3] <= 165
+    assert f7[1] >= 150 and f7[0] >= 306 and f7[2] >= 520
