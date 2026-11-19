@@ -769,3 +769,117 @@ test('agents API: list with selection, default first available, PUT validation a
   await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [], agent: 'codex' }));
   assert.equal((await (await fetch(`${b}/api/agents`)).json()).selected, 'claude');
 });
+
+// ---- digest job API ----
+async function digestServer(t, { runs = [], agents, extractFile } = {}) {
+  const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-dj-')));
+  const root = path.join(tmp, 'pdfs');
+  const dataDir = path.join(tmp, 'data');
+  const out = path.join(tmp, 'out');
+  const examples = path.join(tmp, 'examples');
+  await fs.mkdir(root, { recursive: true });
+  await fs.mkdir(dataDir, { recursive: true });
+  await fs.mkdir(path.join(out, 'd1'), { recursive: true });
+  await fs.mkdir(path.join(examples, 'ex1'), { recursive: true });
+  await fs.writeFile(path.join(root, 'a.pdf'), Buffer.from('%PDF-1.1\n%%EOF\n'));
+  await fs.writeFile(path.join(dataDir, 'settings.json'), JSON.stringify({ folders: [root] }));
+  const src = { id: 'd1', meta: { title: 'D' }, pages: [{ page: 1 }], sentences: { 'p1-s1': { text: 'a', page: 1 } } };
+  await fs.writeFile(path.join(out, 'd1', 'source.json'), JSON.stringify(src));
+  await fs.writeFile(path.join(examples, 'ex1', 'source.json'), JSON.stringify({ ...src, id: 'ex1' }));
+  const calls = [];
+  const runAgent = ({ id, workdir, prompt }) => {
+    let cancel;
+    const cancelled = new Promise((r) => { cancel = () => r({ code: null, signal: 'SIGTERM', timedOut: false }); });
+    calls.push({ id, workdir, prompt });
+    const fn = runs[calls.length - 1] ?? (() => new Promise(() => {}));
+    return { done: Promise.race([Promise.resolve().then(() => fn(workdir)), cancelled]), cancel: () => cancel() };
+  };
+  const detectAgents = async () => agents ?? [{ id: 'codex', name: 'Codex', available: true }, { id: 'claude', name: 'Claude Code', available: false }];
+  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' }, researchContextFile: null },
+    { examplesDir: examples, detectAgents, runAgent, extractFile });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await s.digestJobs?.shutdown(); await fs.rm(tmp, { recursive: true, force: true }); });
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const jpost = (p, body = {}, headers = { 'content-type': 'application/json' }) => fetch(b + p, { method: 'POST', headers, body: JSON.stringify(body) });
+  const job = async (id) => (await fetch(`${b}/api/papers/${id}/digest-job`)).json();
+  const settle = async (id) => {
+    for (let i = 0; i < 400; i += 1) {
+      const j = await job(id);
+      if (['done', 'failed', 'cancelled'].includes(j.state)) return j;
+      await new Promise((r) => setTimeout(r, 5));
+    }
+    throw new Error('job did not settle');
+  };
+  return { s, b, out, jpost, job, settle, calls };
+}
+const goodDigest = (id) => ({ version: 1, paperId: id, takeaway: { text: 't', evidence: ['p1-s1'], why: 'w' }, cards: [], glossary: [] });
+
+test('digest API: 415 guard, 202 start with selected tool, GET job, done replaces digest', async (t) => {
+  const ctx = await digestServer(t, { runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest('d1'))); return { code: 0 }; }] });
+  assert.equal((await fetch(`${ctx.b}/api/papers/d1/digest-job`)).status, 404);
+  assert.equal((await ctx.jpost('/api/papers/d1/digest', {}, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await ctx.jpost('/api/papers/d1/digest-job/cancel', {}, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal(ctx.calls.length, 0);
+  const res = await ctx.jpost('/api/papers/d1/digest');
+  assert.equal(res.status, 202);
+  const j = await res.json();
+  assert.equal(j.paperId, 'd1');
+  assert.equal(j.agent, 'codex');
+  assert.equal(j.maxAttempts, 3);
+  const done = await ctx.settle('d1');
+  assert.equal(done.state, 'done');
+  assert.equal(ctx.calls[0].id, 'codex');
+  assert.deepEqual(JSON.parse(await fs.readFile(path.join(ctx.out, 'd1', 'digest.json'), 'utf8')), goodDigest('d1'));
+  assert.equal((await (await fetch(`${ctx.b}/api/papers/d1`)).json()).digest.takeaway.text, 't');
+});
+
+test('digest API: 409 while running, cancel 200, 404 unknown, 400 example, 400 bad id', async (t) => {
+  const ctx = await digestServer(t);
+  assert.equal((await ctx.jpost('/api/papers/d1/digest')).status, 202);
+  const busy = await ctx.jpost('/api/papers/d1/digest');
+  assert.equal(busy.status, 409);
+  assert.equal((await busy.json()).error, '다른 논문의 요약을 만들고 있습니다.');
+  for (let i = 0; i < 200 && !ctx.calls.length; i += 1) await new Promise((r) => setTimeout(r, 5));
+  const c = await ctx.jpost('/api/papers/d1/digest-job/cancel');
+  assert.equal(c.status, 200);
+  assert.equal((await ctx.settle('d1')).state, 'cancelled');
+  assert.equal((await ctx.jpost('/api/papers/d1/digest-job/cancel')).status, 404);
+  const miss = await ctx.jpost('/api/papers/ghost/digest');
+  assert.equal(miss.status, 404);
+  const ex = await ctx.jpost('/api/papers/ex1/digest');
+  assert.equal(ex.status, 400);
+  assert.equal((await ex.json()).error, '예제 논문은 요약을 다시 만들 수 없습니다.');
+  assert.equal((await ctx.jpost('/api/papers/..%2Fx/digest')).status, 400);
+  assert.equal((await fetch(`${ctx.b}/api/papers/d1/digest`)).status, 404);
+});
+
+test('digest API: no available tool → 400 with install hint', async (t) => {
+  const ctx = await digestServer(t, { agents: [{ id: 'claude', name: 'Claude Code', available: false }, { id: 'codex', name: 'Codex', available: false }] });
+  const r = await ctx.jpost('/api/papers/d1/digest');
+  assert.equal(r.status, 400);
+  assert.equal((await r.json()).error, '쓸 수 있는 AI 도구가 없습니다. Claude Code나 Codex를 설치하고 로그인하세요.');
+});
+
+test('digest API: folder PDF is extracted first and shares the extraction busy flag', async (t) => {
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const extractFile = async ({ cfg, id }) => {
+    await gate;
+    await fs.mkdir(path.join(cfg.outputDir, id), { recursive: true });
+    await fs.writeFile(path.join(cfg.outputDir, id, 'source.json'), JSON.stringify({ id, meta: { title: 'P' }, pages: [{ page: 1 }], sentences: { 'p1-s1': { text: 'a', page: 1 } } }));
+    return { id, source: {} };
+  };
+  let pdfId;
+  const ctx = await digestServer(t, { extractFile, runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest(pdfId))); return { code: 0 }; }] });
+  pdfId = (await (await fetch(`${ctx.b}/api/papers`)).json()).papers.find((p) => p.state === 'pdf').id;
+  const r = await ctx.jpost(`/api/papers/${encodeURIComponent(pdfId)}/digest`);
+  assert.equal(r.status, 202);
+  assert.equal((await r.json()).state, 'extracting');
+  await new Promise((res) => setTimeout(res, 30));
+  const manual = await ctx.jpost('/api/library/extract', { id: pdfId });
+  assert.equal(manual.status, 409);
+  release();
+  const done = await ctx.settle(encodeURIComponent(pdfId));
+  assert.equal(done.state, 'done', done.message);
+  assert.equal(JSON.parse(await fs.readFile(path.join(ctx.out, pdfId, 'digest.json'), 'utf8')).paperId, pdfId);
+});

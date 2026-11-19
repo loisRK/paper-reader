@@ -11,6 +11,7 @@ import { readSettings, writeSettings } from '../library/settings.mjs';
 import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
+import { createDigestJobs } from '../agent/digest-job.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -143,6 +144,23 @@ export function createServer(cfg, deps = {}) {
     listFiles: (folders) => library.list(folders),
     ...(deps.linkTimeoutMs ? { linkTimeoutMs: deps.linkTimeoutMs } : {}),
   });
+  const selectedOf = (agents, saved) => (agents.find((a) => a.id === saved && a.available) ?? agents.find((a) => a.available))?.id ?? null;
+  // One digest job at a time; folder PDFs are extracted through runExtract (same busy flag as manual extraction).
+  const digestJobs = createDigestJobs({
+    cfg,
+    deps: {
+      examplesDir,
+      ...(deps.runAgent ? { runAgent: deps.runAgent } : {}),
+      selectAgent: async () => selectedOf(await detectAgents(), dataDir ? (await readSettings(dataDir)).agent : undefined),
+      findFolderPdf: async (id) => {
+        if (!dataDir) return false;
+        const { folders } = await readSettings(dataDir);
+        if (!folders.length) return false;
+        return (await library.list(folders)).files.some((f) => f.id === id);
+      },
+      extract: (id) => runExtract(id),
+    },
+  });
   // Retry linking unlinked folder papers in the background: one at a time, same paper not again within the cooldown.
   const linkCooldownMs = deps.linkCooldownMs ?? 30_000;
   const linkTried = new Map();
@@ -184,7 +202,6 @@ export function createServer(cfg, deps = {}) {
 
     if (parts[1] === 'agents' && (parts.length === 2 || (parts.length === 3 && parts[2] === 'selected'))) {
       if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
-      const selectedOf = (agents, saved) => (agents.find((a) => a.id === saved && a.available) ?? agents.find((a) => a.available))?.id ?? null;
       if (parts.length === 2) {
         if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
         const agents = await detectAgents();
@@ -308,6 +325,30 @@ export function createServer(cfg, deps = {}) {
       return res.end();
     }
 
+    if (parts[1] === 'papers' && parts.length === 4 && parts[3] === 'digest' && method === 'POST') {
+      const id = checkName(parts[2], 'id');
+      await readBody(req);
+      try {
+        return sendJson(res, 202, await digestJobs.start(id));
+      } catch (err) {
+        if (err.status) throw new HttpError(err.status, err.message);
+        throw err;
+      }
+    }
+
+    if (parts[1] === 'papers' && parts.length === 4 && parts[3] === 'digest-job' && method === 'GET') {
+      const job = digestJobs.get(checkName(parts[2], 'id'));
+      if (!job) throw new HttpError(404, '요약 작업이 없습니다.');
+      return sendJson(res, 200, job);
+    }
+
+    if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'digest-job' && parts[4] === 'cancel' && method === 'POST') {
+      const id = checkName(parts[2], 'id');
+      await readBody(req);
+      if (!digestJobs.cancel(id)) throw new HttpError(404, '진행 중인 요약 작업이 없습니다.');
+      return sendJson(res, 200, digestJobs.get(id));
+    }
+
     if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'figures' && method === 'GET') {
       const id = checkName(parts[2], 'id');
       if (!FIGURE_RE.test(parts[4])) throw new HttpError(400, '잘못된 그림 이름입니다.');
@@ -373,6 +414,7 @@ export function createServer(cfg, deps = {}) {
       sendJson(res, 500, { error: `서버 오류: ${err.message}` });
     }
   });
+  server.digestJobs = digestJobs;
   return server;
 }
 
@@ -399,4 +441,14 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   server.listen(cfg.reader.port, '127.0.0.1', () => {
     console.log(`Paper Reader: http://127.0.0.1:${cfg.reader.port}`);
   });
+  // Leave no AI tool process or temp workdir behind: cancel the running digest job, then exit.
+  let stopping = false;
+  const stop = async () => {
+    if (stopping) return process.exit(1);
+    stopping = true;
+    try { await server.digestJobs.shutdown(); } catch { /* exit anyway */ }
+    process.exit(0);
+  };
+  process.on('SIGINT', stop);
+  process.on('SIGTERM', stop);
 }
