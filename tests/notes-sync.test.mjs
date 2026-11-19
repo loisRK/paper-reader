@@ -337,6 +337,92 @@ test('my highlight deleted in Zotero → removed locally, not recreated', async 
   assert.equal(w.items.size, 0);
 });
 
+test('deleted in Zotero while a local edit is pending (upsert path) → kept with zoteroDeleted conflict, not recreated', async () => {
+  const dir = await tmp();
+  const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'orig' });
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const key = (await readNotes(dir, ID)).highlights[0].zoteroKey;
+  w.items.delete(key);
+  w.bump();
+  await updateHighlight(dir, ID, h.id, { comment: 'my new words', color: '#5fb236' });
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(r.pending, 0, 'op dropped');
+  let local = (await readNotes(dir, ID)).highlights;
+  assert.equal(local.length, 1);
+  assert.equal(local[0].zoteroKey, null);
+  assert.equal(local[0].zoteroVersion, null);
+  assert.equal(local[0].comment, 'my new words');
+  assert.deepEqual(local[0].conflict.mine, { comment: 'my new words', color: '#5fb236' });
+  assert.equal(local[0].conflict.zoteroDeleted, true);
+  assert.ok(local[0].conflict.at);
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  assert.equal(w.calls.filter((c) => c === 'createItems').length, 1, 'never auto-recreated');
+  assert.equal((await readNotes(dir, ID)).highlights.length, 1);
+
+  // 다시 보내기 = updateHighlight with the same values → conflict cleared, recreated
+  await updateHighlight(dir, ID, h.id, { comment: 'my new words', color: '#5fb236' });
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  local = (await readNotes(dir, ID)).highlights[0];
+  assert.equal(local.conflict, null);
+  assert.ok(local.zoteroKey && local.zoteroKey !== key);
+  assert.equal(w.items.get(local.zoteroKey).data.annotationComment, 'my new words');
+});
+
+test('untagged in Zotero while a local edit is pending → kept with zoteroDeleted conflict, Zotero item untouched', async () => {
+  const dir = await tmp();
+  const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'orig' });
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const key = (await readNotes(dir, ID)).highlights[0].zoteroKey;
+  w.items.get(key).data.tags = [];
+  w.items.get(key).version = w.bump();
+  await updateHighlight(dir, ID, h.id, { comment: 'pending words' });
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const local = (await readNotes(dir, ID)).highlights[0];
+  assert.equal(local.comment, 'pending words');
+  assert.equal(local.zoteroKey, null);
+  assert.equal(local.conflict.zoteroDeleted, true);
+  assert.equal(w.items.get(key).data.annotationComment, 'orig');
+  assert.equal(w.calls.filter((c) => c === 'patchItem').length, 0);
+});
+
+test('deleted in Zotero with a queued edit seen only by the pull (readonly) → kept with zoteroDeleted conflict', async () => {
+  const dir = await tmp();
+  const h = await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'orig' });
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const key = (await readNotes(dir, ID)).highlights[0].zoteroKey;
+  w.items.delete(key);
+  w.bump();
+  await updateHighlight(dir, ID, h.id, { comment: 'unsent' });
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: { ...ONLINE, writable: false } });
+  const local = (await readNotes(dir, ID)).highlights;
+  assert.equal(local.length, 1);
+  assert.equal(local[0].comment, 'unsent');
+  assert.equal(local[0].zoteroKey, null);
+  assert.deepEqual(local[0].conflict.mine, { comment: 'unsent', color: '#ffd400' });
+  assert.equal(local[0].conflict.zoteroDeleted, true);
+  assert.deepEqual((await readPending(dir, ID)).ops, [], 'op dropped, not auto-recreated');
+});
+
+test('deleted in Zotero, local differs from last sent but no op (pull path) → kept with zoteroDeleted conflict', async () => {
+  const dir = await tmp();
+  await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'orig' });
+  const w = fakeWriter();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const notes = await readNotes(dir, ID);
+  notes.highlights[0].comment = 'edited but op lost';
+  await writeNotes(dir, ID, notes);
+  w.items.delete(notes.highlights[0].zoteroKey);
+  w.bump();
+  await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: ONLINE });
+  const local = (await readNotes(dir, ID)).highlights;
+  assert.equal(local.length, 1);
+  assert.equal(local[0].conflict.zoteroDeleted, true);
+  assert.equal(local[0].conflict.mine.comment, 'edited but op lost');
+});
+
 test('my highlight missing from a truncated child list is kept (confirmed via getItem)', async () => {
   const dir = await tmp();
   await addHighlight(dir, ID, { sentenceIds: ['p1-s1'], color: '#ffd400', comment: 'keep' });

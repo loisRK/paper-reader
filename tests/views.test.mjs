@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -112,6 +112,19 @@ test('statusText: per status', () => {
   assert.equal(statusText('denied', 0), 'Zotero 쓰기 허용이 필요합니다');
   assert.equal(statusText('rate-limited', 0), 'Zotero 허용 요청이 많아 잠시 후 다시 시도합니다');
   assert.equal(statusText('readonly', 0), 'Zotero 10 이상에서만 메모를 Zotero로 보낼 수 있습니다. 메모는 이 컴퓨터에 저장됩니다.');
+});
+
+test('conflictView: Zotero-deleted highlight offers 다시 보내기 / 삭제; others a dismiss', () => {
+  assert.deepEqual(conflictView({ mine: { comment: '내 말', color: '#ffd400' }, zoteroDeleted: true, at: 't' }), {
+    text: 'Zotero에서 삭제된 하이라이트입니다. 내가 쓴 내용: 내 말', actions: ['resend', 'delete'],
+  });
+  assert.deepEqual(conflictView({ mine: { comment: 'x', color: '#ffd400' }, at: 't' }), {
+    text: 'Zotero에서 바뀌었습니다. 내가 쓴 내용: x', actions: ['dismiss'],
+  });
+  assert.deepEqual(conflictView({ mine: { deleted: true }, at: 't' }), {
+    text: 'Zotero에서 바뀌어 삭제하지 않았습니다.', actions: ['dismiss'],
+  });
+  assert.equal(conflictView(null), null);
 });
 
 test('NOTE_COLORS matches ZOTERO_COLORS (source of truth)', () => {

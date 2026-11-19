@@ -75,6 +75,16 @@ export function statusText(status, pending) {
   }
 }
 
+// What the popover shows for a highlight conflict, and which buttons it offers.
+export function conflictView(conflict) {
+  if (!conflict) return null;
+  if (conflict.zoteroDeleted) {
+    return { text: `Zotero에서 삭제된 하이라이트입니다. 내가 쓴 내용: ${conflict.mine?.comment ?? ''}`, actions: ['resend', 'delete'] };
+  }
+  if (conflict.mine?.deleted) return { text: 'Zotero에서 바뀌어 삭제하지 않았습니다.', actions: ['dismiss'] };
+  return { text: `Zotero에서 바뀌었습니다. 내가 쓴 내용: ${conflict.mine?.comment ?? ''}`, actions: ['dismiss'] };
+}
+
 // ---------- DOM ----------
 
 const sentOf = (node) => (node?.nodeType === 1 ? node : node?.parentElement)?.closest?.('.sent') ?? null;
@@ -218,28 +228,32 @@ export function setupNotes({ id, source, panel, actions, onNotes }) {
     const put = async (patch) => {
       try { replaceHighlight(await actions.updateHighlight(id, h.id, patch)); return true; } catch (e) { fail(e); return false; }
     };
-    const conflict = h.conflict;
+    const remove = async () => {
+      try {
+        await actions.removeHighlight(id, h.id);
+        s.notes.highlights = s.notes.highlights.filter((x) => x.id !== h.id);
+        closePopover();
+        renderMarks();
+      } catch (e) { fail(e); }
+    };
+    // Re-sending the same values clears the conflict and queues an upsert (recreates if unlinked).
+    const ack = async () => { const sid = s.popover; if (await put({ color: h.color, comment: h.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); };
+    const cv = conflictView(h.conflict);
+    const conflictButtons = {
+      dismiss: () => el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '충돌 안내 닫기', onclick: ack }),
+      resend: () => el('button', { type: 'button', class: 'btn', text: '다시 보내기', 'aria-label': 'Zotero로 다시 보내기', onclick: ack }),
+      delete: () => el('button', { type: 'button', class: 'btn btn-quiet', text: '삭제', 'aria-label': '이 컴퓨터에서 하이라이트 삭제', onclick: remove }),
+    };
     return el('section', { class: 'pop-sec' },
-      conflict ? el('div', { class: 'conflict', role: 'alert' },
-        el('span', { text: conflict.mine?.deleted
-          ? 'Zotero에서 바뀌어 삭제하지 않았습니다.'
-          : `Zotero에서 바뀌었습니다. 내가 쓴 내용: ${conflict.mine?.comment ?? ''}` }),
-        el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '충돌 안내 닫기',
-          onclick: async () => { const sid = s.popover; if (await put({ color: h.color, comment: h.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); } })) : null,
+      cv ? el('div', { class: 'conflict', role: 'alert' },
+        el('span', { text: cv.text }),
+        el('div', { class: 'pop-actions' }, cv.actions.map((a) => conflictButtons[a]()))) : null,
       area,
       swatches(h.color, async (color) => { if (await put({ color })) h.color = color; }),
       el('div', { class: 'pop-actions' },
         el('button', { type: 'button', class: 'btn', text: '저장', 'aria-label': '메모 저장',
           onclick: async () => { if (await put({ comment: area.value })) closePopover(); } }),
-        el('button', { type: 'button', class: 'btn btn-quiet', text: '삭제', 'aria-label': '하이라이트 삭제',
-          onclick: async () => {
-            try {
-              await actions.removeHighlight(id, h.id);
-              s.notes.highlights = s.notes.highlights.filter((x) => x.id !== h.id);
-              closePopover();
-              renderMarks();
-            } catch (e) { fail(e); }
-          } })));
+        el('button', { type: 'button', class: 'btn btn-quiet', text: '삭제', 'aria-label': '하이라이트 삭제', onclick: remove })));
   }
 
   // ----- selection toolbar -----

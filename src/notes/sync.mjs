@@ -79,9 +79,25 @@ function resetForNewServer(notes, pending, serverId) {
 function makeSync(ctx) {
   const { notes, pending, writer, source, cards, itemKey, attachmentKey } = ctx;
 
+  const dropOp = (hid) => {
+    pending.ops = pending.ops.filter((o) => !(o.op === 'upsert-highlight' && o.id === hid));
+  };
   const dropHighlight = (hid) => {
     notes.highlights = notes.highlights.filter((h) => h.id !== hid);
-    pending.ops = pending.ops.filter((o) => !(o.op === 'upsert-highlight' && o.id === hid));
+    dropOp(hid);
+  };
+  // h.sent = the comment/color Zotero last had for this highlight (sent or adopted).
+  const markSent = (h) => { h.sent = { comment: h.comment, color: h.color }; };
+  const unsent = (h) => !h.sent || h.sent.comment !== h.comment || h.sent.color !== h.color;
+  // Deleted (or untagged) in Zotero. With a pending local edit the memo must not vanish:
+  // keep the record unlinked with a zoteroDeleted conflict (the user re-sends or deletes it).
+  const goneInZotero = (h, pendingEdit) => {
+    if (!pendingEdit && !unsent(h)) return dropHighlight(h.id);
+    h.zoteroKey = null;
+    h.zoteroVersion = null;
+    delete h.sent;
+    h.conflict = { mine: { comment: h.comment, color: h.color }, zoteroDeleted: true, at: now() };
+    dropOp(h.id);
   };
 
   // Zotero value wins; my differing value is kept in conflict.mine.
@@ -94,6 +110,7 @@ function makeSync(ctx) {
     h.comment = z.comment;
     h.color = z.color;
     h.zoteroVersion = versionOf(item);
+    markSent(h);
   };
 
   async function create(data) {
@@ -123,21 +140,24 @@ function makeSync(ctx) {
       const { key, version } = await create(toZoteroAnnotation(h, source, attachmentKey));
       h.zoteroKey = key;
       h.zoteroVersion = version;
+      markSent(h);
       return;
     }
     const item = await writer.getItem(h.zoteroKey);
-    if (!item) return dropHighlight(h.id); // deleted in Zotero: never recreated
-    if (!isMine(item)) return; // tag removed in Zotero: leave it alone
+    // Deleted or untagged in Zotero: never recreated or touched; this op is a pending edit.
+    if (!item || !isMine(item)) return goneInZotero(h, true);
     if (versionOf(item) !== h.zoteroVersion) return takeZotero(h, item);
     try {
+      const sent = { comment: h.comment, color: h.color };
       h.zoteroVersion = await patch(h.zoteroKey, h.zoteroVersion, {
-        annotationComment: h.comment, annotationColor: h.color,
+        annotationComment: sent.comment, annotationColor: sent.color,
       });
+      h.sent = sent;
     } catch (err) {
       if (!is412(err)) throw err;
       const fresh = await writer.getItem(h.zoteroKey);
       if (fresh) takeZotero(h, fresh);
-      else dropHighlight(h.id);
+      else goneInZotero(h, true);
     }
   }
 
@@ -155,6 +175,7 @@ function makeSync(ctx) {
           comment: d.annotationComment ?? '',
           zoteroKey: t.zoteroKey,
           zoteroVersion: versionOf(item),
+          sent: { comment: d.annotationComment ?? '', color: d.annotationColor || t.color || '#ffd400' },
           conflict: { mine: { deleted: true }, at: now() },
           createdAt: t.createdAt ?? now(),
         });
@@ -259,6 +280,7 @@ function makeSync(ctx) {
           h.comment = d.annotationComment ?? '';
           h.color = d.annotationColor || h.color;
           h.zoteroVersion = versionOf(item);
+          markSent(h);
         }
         continue;
       }
@@ -267,7 +289,7 @@ function makeSync(ctx) {
     }
     // Missing from the list: confirm before dropping (the list could be truncated).
     for (const [key, h] of mine) {
-      if (!seen.has(key) && !(await writer.getItem(key))) dropHighlight(h.id);
+      if (!seen.has(key) && !(await writer.getItem(key))) goneInZotero(h, queued.has(h.id));
     }
     notes.zoteroAnnotations = others;
     if (Number.isFinite(res.libraryVersion)) notes.libraryVersion.annotations = res.libraryVersion;
