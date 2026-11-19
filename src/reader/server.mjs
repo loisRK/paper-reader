@@ -10,6 +10,7 @@ import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/loca
 import { createNotesRoutes } from './notes-routes.mjs';
 import { readSettings, writeSettings, recordLastModel } from '../library/settings.mjs';
 import { configuredModel } from '../agent/models.mjs';
+import { claudeProfiles, profileView, lastModelKey } from '../agent/accounts.mjs';
 import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
@@ -198,15 +199,27 @@ export function createServer(cfg, deps = {}) {
     ...(deps.linkTimeoutMs ? { linkTimeoutMs: deps.linkTimeoutMs } : {}),
   });
   // Each tool's configured model (read-only from its own config) and the model it last reported in a run.
+  // Claude also lists its accounts (config dirs from shell aliases); dirs never leave the server.
   const home = deps.home ?? os.homedir();
   const agentEnv = deps.env ?? process.env;
+  const savedSettings = async () => (dataDir ? readSettings(dataDir) : { folders: [] });
+  async function claudeAccount(saved) {
+    const profiles = await claudeProfiles({ home });
+    const want = saved.agentProfile?.claude;
+    return { profiles, selected: profiles.find((p) => p.label === want) ?? profiles[0] };
+  }
   async function withModels(agents) {
-    const { lastModels = {} } = dataDir ? await readSettings(dataDir) : {};
-    return Promise.all(agents.map(async (a) => ({
-      ...a,
-      configuredModel: await configuredModel(a.id, { home, env: agentEnv }),
-      lastModel: lastModels[a.id] ?? null,
-    })));
+    const saved = await savedSettings();
+    const lastModels = saved.lastModels ?? {};
+    return Promise.all(agents.map(async (a) => {
+      if (a.id === 'claude') {
+        const { profiles, selected } = await claudeAccount(saved);
+        const views = await Promise.all(profiles.map((p) => profileView(p, { home, env: agentEnv, lastModels })));
+        const cur = views.find((v) => v.label === selected.label);
+        return { ...a, configuredModel: cur.configuredModel, lastModel: cur.lastModel, profiles: views, selectedProfile: cur.label };
+      }
+      return { ...a, configuredModel: await configuredModel(a.id, { home, env: agentEnv }), lastModel: lastModels[a.id] ?? null };
+    }));
   }
   const selectedOf = (agents, saved) => (agents.find((a) => a.id === saved && a.available) ?? agents.find((a) => a.available))?.id ?? null;
   // One digest job at a time; folder PDFs are extracted through runExtract (same busy flag as manual extraction).
@@ -215,7 +228,13 @@ export function createServer(cfg, deps = {}) {
     deps: {
       examplesDir,
       ...(deps.runAgent ? { runAgent: deps.runAgent } : {}),
-      selectAgent: async () => selectedOf(await detectAgents(), dataDir ? (await readSettings(dataDir)).agent : undefined),
+      selectAgent: async () => {
+        const saved = await savedSettings();
+        const id = selectedOf(await detectAgents(), saved.agent);
+        if (id !== 'claude') return id;
+        const { selected } = await claudeAccount(saved);
+        return { agent: 'claude', profile: selected.label, configDir: selected.dir };
+      },
       findFolderPdf: async (id) => {
         if (!dataDir) return false;
         const { folders } = await readSettings(dataDir);
@@ -223,7 +242,7 @@ export function createServer(cfg, deps = {}) {
         return (await library.list(folders)).files.some((f) => f.id === id);
       },
       extract: (id) => runExtract(id),
-      recordModel: async ({ agent, model }) => { if (dataDir) await recordLastModel(dataDir, agent, model); },
+      recordModel: async ({ agent, profile, model }) => { if (dataDir) await recordLastModel(dataDir, lastModelKey(agent, profile), model); },
     },
   });
   // Retry linking unlinked folder papers in the background: one at a time, same paper not again within the cooldown.
@@ -275,7 +294,13 @@ export function createServer(cfg, deps = {}) {
       const body = await readBody(req);
       const agents = await detectAgents();
       if (!agents.some((a) => a.id === body?.agent && a.available)) throw new HttpError(400, '이 AI 도구는 지금 쓸 수 없습니다.');
-      await writeSettings(dataDir, { agent: body.agent });
+      let agentProfile;
+      if (body.profile !== undefined) {
+        const known = body.agent === 'claude' ? (await claudeProfiles({ home })).map((p) => p.label) : [];
+        if (typeof body.profile !== 'string' || !known.includes(body.profile)) throw new HttpError(400, '이 계정을 찾을 수 없습니다.');
+        agentProfile = { claude: body.profile };
+      }
+      await writeSettings(dataDir, { agent: body.agent, ...(agentProfile ? { agentProfile } : {}) });
       return sendJson(res, 200, { agents: await withModels(agents), selected: body.agent });
     }
 

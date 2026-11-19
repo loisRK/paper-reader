@@ -41,8 +41,8 @@ async function setup(t, { pdfIds = [], extract, runs, agent = 'claude', research
   const calls = [];
   const workdirs = [];
   // runs: array of (workdir, call) => result | Promise, one per attempt.
-  const runAgent = ({ id, workdir, prompt, onLog }) => {
-    const call = { id, workdir, prompt, files: null, cancelled: false, onLog };
+  const runAgent = ({ id, workdir, prompt, onLog, configDir }) => {
+    const call = { id, workdir, prompt, files: null, cancelled: false, onLog, configDir };
     calls.push(call);
     workdirs.push(workdir);
     let resolveCancel;
@@ -380,4 +380,18 @@ test('the model a run reports is recorded (even when the attempt fails), never t
   await settled(c2.jobs, 'p1');
   assert.equal(c2.jobs.get('p1').state, 'failed'); // a failing recorder does not change the outcome
   assert.deepEqual(rec2, [{ agent: 'claude', model: 'claude-opus-4-5' }]);
+});
+
+test('a Claude account from selectAgent: label in the job, its dir only passed to the run, model keyed by account', async (t) => {
+  const runs = [];
+  const recorded = [];
+  const c = await setup(t, { runs, agent: { agent: 'claude', profile: 'claude-yvin', configDir: '/h/.claude/yvin' }, recordModel: async (r) => { recorded.push(r); } });
+  runs.push(async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(GOOD)); return { code: 0, model: 'claude-sonnet-4-5' }; });
+  const job = await c.jobs.start('p1');
+  assert.equal(job.agent, 'claude');
+  assert.equal(job.profile, 'claude-yvin');
+  await settled(c.jobs, 'p1');
+  assert.equal(c.calls[0].configDir, '/h/.claude/yvin');
+  assert.doesNotMatch(JSON.stringify(c.jobs.get('p1')), /\.claude\/yvin/);
+  assert.deepEqual(recorded, [{ agent: 'claude', profile: 'claude-yvin', model: 'claude-sonnet-4-5' }]);
 });

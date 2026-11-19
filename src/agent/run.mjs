@@ -132,19 +132,24 @@ function hintFor(id, text) {
 const SPAWN_FAIL = 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.';
 
 export function runAgent({
-  id, workdir, prompt, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
+  id, workdir, prompt, configDir, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
   spawnImpl = spawn, killImpl = process.kill, onLog = () => {},
 }) {
   const failed = (hint) => ({ done: Promise.resolve({ code: null, signal: null, timedOut: false, errorHint: hint }), cancel() {} });
   let child;
   try {
-    const { cmd, args, files } = agentCommand(id, { workdir, prompt });
+    const { cmd, args, files, env } = agentCommand(id, { workdir, prompt, configDir });
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(workdir, rel);
       fs.mkdirSync(path.dirname(file), { recursive: true });
       fs.writeFileSync(file, content);
     }
-    child = spawnImpl(cmd, args, { cwd: workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] });
+    const opts = { cwd: workdir, detached: true, stdio: ['ignore', 'pipe', 'pipe'] };
+    if (env) {
+      opts.env = { ...process.env };
+      for (const [k, v] of Object.entries(env)) { if (v === undefined) delete opts.env[k]; else opts.env[k] = v; }
+    }
+    child = spawnImpl(cmd, args, opts);
   } catch {
     return failed(SPAWN_FAIL);
   }

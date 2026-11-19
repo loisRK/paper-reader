@@ -204,6 +204,8 @@ export function modelLines(agent) {
   return lines;
 }
 
+export const profileOptionText = (p) => `${p.label} · ${p.email}`;
+
 // "AI 도구: [Claude Code ▾]" — loads asynchronously (detection runs the tools' --version).
 function agentPicker(actions) {
   const box = el('div', { class: 'agent-picker' }, el('span', { class: 'folder-note', text: 'AI 도구 확인 중…' }));
@@ -224,23 +226,35 @@ function agentPicker(actions) {
         title: a.available ? (a.version ?? null) : (a.message ?? '사용할 수 없습니다'),
         text: a.available ? a.name : `${a.name} (사용 불가)`,
       })));
-    select.addEventListener('change', async () => {
-      const prev = info.selected;
-      select.disabled = true;
+    // One change handler for both selects: `apply()` saves, redraws, and restores the old value on failure.
+    const apply = async (target, prev, call, done) => {
+      target.disabled = true;
       try {
-        draw(await actions.selectAgent(select.value));
-        actions.toast('AI 도구를 바꿨습니다.');
+        draw(await call());
+        actions.toast(done);
       } catch (err) {
         actions.toast(err.message);
-        select.value = prev ?? '';
-        select.disabled = false;
+        target.value = prev ?? '';
+        target.disabled = false;
       }
-    });
+    };
+    select.addEventListener('change', () => apply(select, info.selected, () => actions.selectAgent(select.value), 'AI 도구를 바꿨습니다.'));
     const current = agents.find((a) => a.id === info.selected);
+    let account = null;
+    if (current?.profiles?.length > 1) {
+      const pick = el('select', { id: 'agent-profile', class: 'agent-select', name: 'agent-profile' },
+        current.profiles.map((p) => el('option', { value: p.label, selected: p.label === current.selectedProfile, text: profileOptionText(p) })));
+      pick.addEventListener('change', () => apply(pick, current.selectedProfile, () => actions.selectAgent(current.id, pick.value), '계정을 바꿨습니다.'));
+      account = el('div', { class: 'agent-account' },
+        el('label', { class: 'folder-note', for: 'agent-profile', text: '계정' }), pick);
+    } else if (current?.profiles?.length === 1) {
+      account = el('span', { class: 'folder-note', text: `계정: ${profileOptionText(current.profiles[0])}` });
+    }
     setChildren(box,
       el('label', { class: 'sr-only', for: 'agent-select', text: 'AI 도구' }),
       select,
       el('span', { class: 'folder-note', text: '요약 만들기에 쓸 도구입니다.' }),
+      account,
       current ? el('div', { class: 'agent-models' }, modelLines(current).map((t) => el('span', { class: 'folder-note', text: t }))) : null,
     );
   };

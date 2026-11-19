@@ -179,3 +179,20 @@ test('gemini policy: shell/web denied, reads only workdir files, writes only dig
   for (const r of rules.filter((x) => x.argsPattern)) assert.ok(toml.includes(`argsPattern = ${JSON.stringify(r.argsPattern)}`));
   assert.throws(() => geminiPolicyRules('/tmp/a"b'));
 });
+
+test('claude command: the account is explicit in the child env (default removes CLAUDE_CONFIG_DIR)', () => {
+  assert.deepEqual(agentCommand('claude', { workdir: '/w', prompt: 'P' }).env, { CLAUDE_CONFIG_DIR: undefined });
+  assert.deepEqual(agentCommand('claude', { workdir: '/w', prompt: 'P', configDir: '/h/.claude/yvin' }).env, { CLAUDE_CONFIG_DIR: '/h/.claude/yvin' });
+  assert.equal(agentCommand('codex', { workdir: '/w', prompt: 'P' }).env, undefined);
+});
+
+test('settings: agentProfile kept across writes; bad labels rejected', async () => {
+  const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-prof-'));
+  try {
+    await writeSettings(d, { agent: 'claude', agentProfile: { claude: 'claude-yvin' } });
+    await writeSettings(d, { folders: [] });
+    assert.deepEqual((await readSettings(d)).agentProfile, { claude: 'claude-yvin' });
+    await assert.rejects(writeSettings(d, { agentProfile: { claude: '../x' } }), { status: 400 });
+    await assert.rejects(writeSettings(d, { agentProfile: { codex: 'a' } }), { status: 400 });
+  } finally { await fs.rm(d, { recursive: true, force: true }); }
+});

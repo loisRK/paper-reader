@@ -59,7 +59,12 @@ export function geminiPolicyToml(workdir) {
   ].join('\n')).join('\n\n') + '\n';
 }
 
-export function agentCommand(id, { workdir, prompt }) {
+/**
+ * `env` (when present) patches the child's environment: a value of undefined removes the variable.
+ * Claude: the account is always explicit — the default account removes CLAUDE_CONFIG_DIR, another sets it —
+ * so a server started from an aliased shell never silently uses that shell's account.
+ */
+export function agentCommand(id, { workdir, prompt, configDir }) {
   if (id === 'claude') {
     // No --bare: it would require an API key instead of the logged-in account.
     return {
@@ -76,6 +81,7 @@ export function agentCommand(id, { workdir, prompt }) {
         '--verbose',
       ],
       files: { '.claude-settings.json': JSON.stringify(CLAUDE_SETTINGS, null, 2) },
+      env: { CLAUDE_CONFIG_DIR: configDir || undefined },
     };
   }
   if (id === 'codex') {

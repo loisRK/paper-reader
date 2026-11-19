@@ -784,7 +784,7 @@ test('agents API: list with selection, default first available, PUT validation a
 });
 
 // ---- digest job API ----
-async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf } = {}) {
+async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf, home: homeDir } = {}) {
   const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-dj-')));
   const root = path.join(tmp, 'pdfs');
   const dataDir = path.join(tmp, 'data');
@@ -800,16 +800,16 @@ async function digestServer(t, { runs = [], agents, extractFile, md5File, d1Pdf 
   await fs.writeFile(path.join(out, 'd1', 'source.json'), JSON.stringify(src));
   await fs.writeFile(path.join(examples, 'ex1', 'source.json'), JSON.stringify({ ...src, id: 'ex1' }));
   const calls = [];
-  const runAgent = ({ id, workdir, prompt }) => {
+  const runAgent = ({ id, workdir, prompt, configDir }) => {
     let cancel;
     const cancelled = new Promise((r) => { cancel = () => r({ code: null, signal: 'SIGTERM', timedOut: false }); });
-    calls.push({ id, workdir, prompt });
+    calls.push({ id, workdir, prompt, configDir });
     const fn = runs[calls.length - 1] ?? (() => new Promise(() => {}));
     return { done: Promise.race([Promise.resolve().then(() => fn(workdir)), cancelled]), cancel: () => cancel() };
   };
   const detectAgents = async () => agents ?? [{ id: 'codex', name: 'Codex', available: true }, { id: 'claude', name: 'Claude Code', available: false }];
   const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } },
-    { examplesDir: examples, detectAgents, runAgent, extractFile, home: path.join(tmp, 'home'), env: {}, ...(md5File ? { md5File } : {}) });
+    { examplesDir: examples, detectAgents, runAgent, extractFile, home: homeDir ?? path.join(tmp, 'home'), env: {}, ...(md5File ? { md5File } : {}) });
   await new Promise((r) => s.listen(0, '127.0.0.1', r));
   t.after(async () => { s.close(); await s.digestJobs?.shutdown(); await fs.rm(tmp, { recursive: true, force: true }); });
   const b = `http://127.0.0.1:${s.address().port}`;
@@ -996,4 +996,41 @@ test('agents API: the model a digest run reported shows as lastModel', async (t)
   assert.ok(!Number.isNaN(Date.parse(codex.lastModel.at)));
   assert.equal(g.agents.find((a) => a.id === 'claude').lastModel, null);
   assert.equal(JSON.parse(await fs.readFile(path.join(ctx.dataDir, 'settings.json'), 'utf8')).lastModels.codex.model, 'gpt-5-codex');
+});
+
+test('agents API: Claude accounts (aliases) with email and model, chosen account drives the run env; no paths sent', async (t) => {
+  const home = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-home-')));
+  t.after(() => fs.rm(home, { recursive: true, force: true }));
+  const yvin = path.join(home, '.claude', 'yvin');
+  await fs.mkdir(yvin, { recursive: true });
+  await fs.writeFile(path.join(home, '.zshrc'), "alias claude-yvin='CLAUDE_CONFIG_DIR=~/.claude/yvin claude'\n");
+  await fs.writeFile(path.join(home, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'me@x.com' } }));
+  await fs.writeFile(path.join(yvin, '.claude.json'), JSON.stringify({ oauthAccount: { emailAddress: 'yvin@x.com' } }));
+  await fs.writeFile(path.join(yvin, 'settings.json'), JSON.stringify({ model: 'sonnet' }));
+  const ctx = await digestServer(t, {
+    home,
+    agents: [{ id: 'claude', name: 'Claude Code', available: true }, { id: 'codex', name: 'Codex', available: false }],
+    runs: [async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(goodDigest('d1'))); return { code: 0, model: 'claude-sonnet-4-5' }; }],
+  });
+  const pj = (body) => fetch(`${ctx.b}/api/agents/selected`, { method: 'PUT', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
+  let g = await (await fetch(`${ctx.b}/api/agents`)).json();
+  const claude = () => g.agents.find((a) => a.id === 'claude');
+  assert.equal(claude().selectedProfile, 'claude');
+  assert.deepEqual(claude().profiles.map((p) => [p.label, p.email]), [['claude', 'me@x.com'], ['claude-yvin', 'yvin@x.com']]);
+  assert.ok(!JSON.stringify(g).includes(home), 'no local paths in the response');
+  assert.equal((await pj({ agent: 'claude', profile: 'nope' })).status, 400);
+  assert.equal((await pj({ agent: 'codex', profile: 'claude' })).status, 400);
+  const r = await pj({ agent: 'claude', profile: 'claude-yvin' });
+  assert.equal(r.status, 200);
+  g = await r.json();
+  assert.equal(claude().selectedProfile, 'claude-yvin');
+  assert.equal(claude().configuredModel, 'sonnet');
+  assert.equal((await ctx.jpost('/api/papers/d1/digest')).status, 202);
+  assert.equal((await ctx.settle('d1')).state, 'done');
+  assert.equal(ctx.calls[0].configDir, yvin);
+  g = await (await fetch(`${ctx.b}/api/agents`)).json();
+  assert.equal(claude().lastModel.model, 'claude-sonnet-4-5');
+  assert.equal(claude().profiles.find((p) => p.label === 'claude').lastModel, null);
+  // switching back to the default account: the run gets no config dir (CLAUDE_CONFIG_DIR removed)
+  assert.equal((await pj({ agent: 'claude', profile: 'claude' })).status, 200);
 });

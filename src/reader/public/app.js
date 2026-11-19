@@ -43,8 +43,8 @@ const actions = {
     agentsInfo ??= api('/api/agents').catch((err) => { agentsInfo = null; throw err; });
     return agentsInfo;
   },
-  async selectAgent(agent) {
-    await api('/api/agents/selected', sendJson('PUT', { agent }));
+  async selectAgent(agent, profile) {
+    await api('/api/agents/selected', sendJson('PUT', profile === undefined ? { agent } : { agent, profile }));
     agentsInfo = null;
     return actions.agents();
   },

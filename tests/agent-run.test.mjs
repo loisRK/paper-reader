@@ -333,3 +333,20 @@ test('runAgent reports the model from the first init event (claude, gemini) or t
     assert.equal((await done).model, model, `${id} ${out}`);
   }
 });
+
+test('runAgent claude: never inherits the server\'s CLAUDE_CONFIG_DIR', async () => {
+  const saved = process.env.CLAUDE_CONFIG_DIR;
+  process.env.CLAUDE_CONFIG_DIR = '/inherited/dir';
+  try {
+    const a = fakeSpawn();
+    runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: a.impl, onLog() {} });
+    assert.equal('CLAUDE_CONFIG_DIR' in a.calls[0].opts.env, false);
+    assert.equal(a.calls[0].opts.env.PATH, process.env.PATH);
+    const b = fakeSpawn();
+    runAgent({ id: 'claude', workdir: W, prompt: 'P', configDir: '/h/.claude/yvin', spawnImpl: b.impl, onLog() {} });
+    assert.equal(b.calls[0].opts.env.CLAUDE_CONFIG_DIR, '/h/.claude/yvin');
+    assert.equal(process.env.CLAUDE_CONFIG_DIR, '/inherited/dir'); // the server env itself is untouched
+  } finally {
+    if (saved === undefined) delete process.env.CLAUDE_CONFIG_DIR; else process.env.CLAUDE_CONFIG_DIR = saved;
+  }
+});

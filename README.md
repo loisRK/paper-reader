@@ -89,6 +89,8 @@ cp paper-reader.config.example.json paper-reader.config.json
 
 도구 칸 아래에는 **설정된 모델**(각 도구의 설정 파일 `~/.claude/settings.json`의 `model`(또는 `ANTHROPIC_MODEL`), `~/.codex/config.toml`의 `model`, `~/.gemini/settings.json`의 `model.name`을 읽기만 함, 없으면 `기본값 (계정 플랜에 따라 정해짐)`)과 **최근 실행**(마지막 실행 때 도구가 알려 준 모델과 시각, `data/settings.json`의 `lastModels`)이 표시됩니다.
 
+**Claude Code 계정**: 셸 설정(`~/.zshrc`, `~/.bashrc`, `~/.zprofile`)에 `alias claude-yvin='CLAUDE_CONFIG_DIR=~/.claude/yvin claude'` 같은 별칭이 있으면, 기본 계정(`claude`)과 함께 **계정** 선택 칸에 `별칭 · 로그인 이메일`로 보입니다(폴더가 있는 별칭만, 이메일은 각 폴더의 `.claude.json`에서 읽기만 함). 고른 계정은 `data/settings.json`의 `agentProfile`에 저장되고, 실행할 때 그 계정의 `CLAUDE_CONFIG_DIR`을 명시적으로 넘깁니다(기본 계정은 이 변수를 지움). 서버를 띄운 셸의 값은 쓰지 않습니다.
+
 모든 도구는 임시 작업 폴더(홈 폴더 밖)에서 실행되며, 그 폴더에는 논문 본문(`paper.txt`)·그림 목록·작성 규칙·작업 지시만 들어갑니다. 저장소·PDF·`outputDir` 경로는 넘기지 않고, 끝나면 폴더를 지웁니다. 결과는 서버가 검증한 뒤에만 기존 요약과 바꿉니다.
 
 ### 직접 실행하는 명령

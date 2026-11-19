@@ -41,10 +41,10 @@ export function redactPaths(text) {
 
 /**
  * One digest job at a time (any paper). deps:
- *  selectAgent() => Promise<'claude'|'codex'|null>
+ *  selectAgent() => Promise<id | { agent, profile?, configDir? } | null>   (configDir stays out of job state)
  *  findFolderPdf(id) => Promise<boolean>   (scanned folder PDF not yet extracted)
  *  extract(id) => Promise                  (stage 2 extraction; shares its busy flag)
- *  recordModel({ agent, model }) => Promise  (the model a run reported; failures are ignored)
+ *  recordModel({ agent, profile?, model }) => Promise  (the model a run reported; failures are ignored)
  *  runAgent, prepareWorkdir, cleanupWorkdir, buildPrompt, rulesFile, examplesDir, timeoutMs  (overridable)
  */
 export function createDigestJobs({ cfg, deps = {} }) {
@@ -150,6 +150,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
         addLog(job, `${attempt}번째 시도: 요약을 쓰는 중`);
         ctx.handle = runAgent({
           id: job.agent,
+          ...(ctx.configDir ? { configDir: ctx.configDir } : {}),
           workdir,
           prompt: buildPrompt({ attempt, problems }),
           onLog: (line) => addLog(job, line),
@@ -158,7 +159,7 @@ export function createDigestJobs({ cfg, deps = {} }) {
         const result = await ctx.handle.done;
         ctx.handle = null;
         if (result.model) {
-          try { await recordModel({ agent: job.agent, model: result.model }); } catch (err) { console.error('[digest-job] recordModel', err?.code ?? ''); }
+          try { await recordModel({ agent: job.agent, ...(job.profile ? { profile: job.profile } : {}), model: result.model }); } catch (err) { console.error('[digest-job] recordModel', err?.code ?? ''); }
         }
         if (ctx.cancelled) return;
         if (result.timedOut) return fail(TIMEOUT_MESSAGE);
@@ -209,19 +210,22 @@ export function createDigestJobs({ cfg, deps = {} }) {
         if (!(await findFolderPdf(paperId))) throw new DigestJobError(404, NOT_FOUND_MESSAGE);
         needsExtract = true;
       }
-      const agent = await selectAgent();
+      const picked = await selectAgent();
+      const agent = typeof picked === 'string' ? picked : picked?.agent;
       if (!agent) throw new DigestJobError(400, NO_AGENT_MESSAGE);
+      const profile = typeof picked === 'object' && typeof picked.profile === 'string' ? picked.profile : undefined;
       const job = {
         id: randomUUID(),
         paperId,
         agent,
+        ...(profile ? { profile } : {}),
         state: needsExtract ? 'extracting' : 'writing',
         attempt: needsExtract ? 0 : 1,
         maxAttempts: MAX_ATTEMPTS,
         log: [],
         startedAt: new Date().toISOString(),
       };
-      const ctx = { job, ids: new Set([paperId]), cancelled: false, handle: null, settled: null };
+      const ctx = { job, ids: new Set([paperId]), cancelled: false, handle: null, settled: null, configDir: typeof picked === 'object' ? picked.configDir ?? null : null };
       current = ctx;
       last.set(paperId, job);
       ctx.settled = run(ctx, needsExtract);

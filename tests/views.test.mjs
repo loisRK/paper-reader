@@ -619,3 +619,10 @@ test('modelLines: configured model and the last run (local M월 D일 HH:mm)', ()
   assert.deepEqual(modelLines({}), ['설정된 모델: 기본값 (계정 플랜에 따라 정해짐)']);
   assert.deepEqual(modelLines({ configuredModel: 'x', lastModel: { model: 'm', at: 'garbage' } }), ['설정된 모델: x', '최근 실행: m']);
 });
+
+import { profileOptionText } from '../src/reader/public/views/list.js';
+
+test('profileOptionText: alias · email', () => {
+  assert.equal(profileOptionText({ label: 'claude-yvin', email: 'y@x.com' }), 'claude-yvin · y@x.com');
+  assert.equal(profileOptionText({ label: 'claude', email: '로그인 정보 없음' }), 'claude · 로그인 정보 없음');
+});

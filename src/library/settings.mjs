@@ -26,12 +26,24 @@ function cleanLastModels(v) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// agentProfile: { claude: '<account label>' } — which account (config dir) of a tool to run.
+const PROFILE_AGENTS = ['claude'];
+const LABEL_RE = /^[A-Za-z0-9_.-]{1,64}$/;
+function cleanProfiles(v) {
+  if (!isObj(v)) return undefined;
+  const out = {};
+  for (const a of PROFILE_AGENTS) if (typeof v[a] === 'string' && LABEL_RE.test(v[a])) out[a] = v[a];
+  return Object.keys(out).length ? out : undefined;
+}
+
 export async function readSettings(dataDir) {
   try {
     const v = JSON.parse(await fs.readFile(settingsFile(dataDir), 'utf8'));
     const folders = Array.isArray(v?.folders) ? v.folders.filter((f) => typeof f === 'string') : [];
     const out = { folders };
     if (AGENT_IDS.includes(v?.agent)) out.agent = v.agent;
+    const agentProfile = cleanProfiles(v?.agentProfile);
+    if (agentProfile) out.agentProfile = agentProfile;
     const lastModels = cleanLastModels(v?.lastModels);
     if (lastModels) out.lastModels = lastModels;
     return out;
@@ -80,13 +92,19 @@ export async function validateFolders(folders, saved = []) {
 }
 
 // Fields left undefined keep their saved value, so saving folders never drops `agent` and vice versa.
-export async function writeSettings(dataDir, { folders, agent } = {}) {
+export async function writeSettings(dataDir, { folders, agent, agentProfile } = {}) {
   const saved = await readSettings(dataDir);
   const next = { folders: folders === undefined ? saved.folders : await validateFolders(folders, saved.folders) };
   if (agent !== undefined) {
     if (!AGENT_IDS.includes(agent)) throw new SettingsError('알 수 없는 AI 도구입니다.');
     next.agent = agent;
   } else if (saved.agent) next.agent = saved.agent;
+  if (agentProfile !== undefined) {
+    if (!isObj(agentProfile) || Object.entries(agentProfile).some(([k, v]) => !PROFILE_AGENTS.includes(k) || typeof v !== 'string' || !LABEL_RE.test(v))) {
+      throw new SettingsError('알 수 없는 계정입니다.');
+    }
+    next.agentProfile = { ...(saved.agentProfile ?? {}), ...agentProfile };
+  } else if (saved.agentProfile) next.agentProfile = saved.agentProfile;
   if (saved.lastModels) next.lastModels = saved.lastModels;
   await writeAtomic(dataDir, next);
 }
