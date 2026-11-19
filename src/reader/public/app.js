@@ -37,12 +37,15 @@ const actions = {
       toast(`진행 상황을 저장하지 못했습니다: ${err.message}`);
     }
   },
+  // Resolves true only when Zotero accepted the item.
   async register(search, n) {
     try {
       const r = await api('/api/register', sendJson('POST', { search, n }));
       toast(r?.message ?? '등록 요청을 보냈습니다.');
+      return r?.ok === true;
     } catch (err) {
       toast(`등록 실패: ${err.message}`);
+      return false;
     }
   },
 };

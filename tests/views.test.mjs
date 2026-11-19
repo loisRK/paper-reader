@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { metricBadges } from '../src/reader/public/views/search.js';
+import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
 import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence } from '../src/reader/public/views/paper.js';
 import { progressPercent } from '../src/reader/public/views/list.js';
 
@@ -65,4 +65,13 @@ test('cardEvidence: 모드에 보이는 항목의 evidence만 모은다', () => 
 test('progressPercent', () => {
   assert.equal(progressPercent({ cardsRead: 1, cardsTotal: 4 }), 25);
   assert.equal(progressPercent({ cardsRead: 0, cardsTotal: 0 }), 0);
+});
+
+test('citationTrend: last 3 years ending at the latest year, missing years as 0', () => {
+  assert.equal(citationTrend([{ year: 2026, count: 20 }, { year: 2024, count: 3 }, { year: 2025, count: 12 }, { year: 2022, count: 9 }]),
+    '인용 2024:3 · 2025:12 · 2026:20');
+  assert.equal(citationTrend([{ year: 2026, count: 5 }, { year: 2024, count: 1 }]), '인용 2024:1 · 2025:0 · 2026:5');
+  assert.equal(citationTrend([]), null);
+  assert.equal(citationTrend(undefined), null);
+  assert.equal(citationTrend([{ year: 'x', count: 1 }]), null);
 });

@@ -15,17 +15,30 @@ export function metricBadges(metrics) {
   return out;
 }
 
+// Citations per year for the last 3 years, ending at the latest year in the data (missing years = 0).
+export function citationTrend(countsByYear) {
+  const rows = (Array.isArray(countsByYear) ? countsByYear : [])
+    .filter((r) => Number.isInteger(r?.year) && Number.isFinite(r?.count));
+  if (!rows.length) return null;
+  const latest = Math.max(...rows.map((r) => r.year));
+  const years = [latest - 2, latest - 1, latest];
+  return `인용 ${years.map((y) => `${y}:${rows.find((r) => r.year === y)?.count ?? 0}`).join(' · ')}`;
+}
+
 function paperCard(p, searchName, actions) {
   const btn = el('button', { type: 'button', class: 'btn', text: 'Zotero에 등록' });
   btn.addEventListener('click', async () => {
     btn.disabled = true;
+    let ok = false;
     try {
-      await actions.register(searchName, p.n);
+      ok = (await actions.register(searchName, p.n)) === true;
     } finally {
-      btn.disabled = false;
+      if (ok) btn.textContent = '등록됨';
+      else btn.disabled = false;
     }
   });
   const meta = [p.journal || '저널 정보 없음', p.publicationDate, `인용 ${p.citedBy ?? 0}회`].filter(Boolean).join(' · ');
+  const trend = citationTrend(p.countsByYear);
   return el('li', { class: 'result' },
     el('div', { class: 'result-head' },
       el('span', { class: 'result-num', text: String(p.n) }),
@@ -35,6 +48,7 @@ function paperCard(p, searchName, actions) {
       ? el('p', { class: 'result-summary', text: p.summaryKo })
       : el('p', { class: 'result-summary pending', text: '요약 대기' }),
     el('p', { class: 'result-meta', text: meta }),
+    trend ? el('p', { class: 'result-meta', text: trend }) : null,
     el('ul', { class: 'badges', 'aria-label': '저널 지표' },
       metricBadges(p.metrics).map((b) => el('li', { class: b.unverified ? 'badge unverified' : 'badge', text: b.label }))),
     el('div', { class: 'result-actions' },
@@ -58,7 +72,7 @@ function section(id, title, sec, body) {
   );
 }
 
-// data: { name, search } ; actions: { register(searchName, n) }
+// data: { name, search } ; actions: { register(searchName, n) → Promise<boolean> }
 export function render(container, data, actions) {
   clear(container);
   const s = data.search ?? {};
