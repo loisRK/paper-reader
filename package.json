@@ -1,0 +1,19 @@
+{
+  "name": "paper-reader",
+  "version": "0.1.0",
+  "description": "Search journal papers, extract Zotero PDFs, and read AI summaries in a local reader app.",
+  "type": "module",
+  "license": "MIT",
+  "private": true,
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test \"tests/*.test.mjs\"",
+    "test:py": ".venv/bin/pytest -q tests/test_extract.py",
+    "search": "node src/search/run.mjs",
+    "register": "node src/zotero/register-cli.mjs",
+    "extract": "node src/digest/extract-cli.mjs",
+    "check": "node src/digest/check-cli.mjs",
+    "reader": "node src/reader/server.mjs",
+    "metrics:sjr": "node src/search/metrics.mjs --download"
+  }
+}

@@ -1,0 +1,8 @@
+paper-reader.config.json
+digests/
+data/
+.venv/
+node_modules/
+__pycache__/
+.DS_Store
+.superpowers/
