@@ -110,14 +110,15 @@
       "section": "setup",
       "question": "무엇을, 무엇과 비교해 시험했나?",
       "answer": "공개 로그 5종에서 시스템 간 전이 쌍을 만들고, 7개 기존 방법과 20-shot으로 비교했다.",
-      "explain": "실험은 두 갈래다. HDFS·BGL·Thunderbird·Hadoop 사이의 1→1 전이 6쌍과, AIT-LDS v2.0의 두 기업 웹 로그 사이의 전이다. 대상 시스템의 지원 집합은 클래스당 20개로 고정하고 5회 실행 평균을 보고하며, 7개 기존 방법과 같은 지원 집합으로 비교한다. 주 평가 기준은 임계값 설정에 영향을 받지 않는 AUC다.",
+      "explain": "실험은 두 갈래다. HDFS·BGL·Thunderbird·Hadoop 사이의 1→1 전이 6쌍과, AIT-LDS v2.0의 두 기업 웹 로그 사이의 전이다. 대상 시스템의 지원 집합은 클래스당 20개로 고정하고 5회 실행 평균을 보고하며, 7개 기존 방법과 같은 지원 집합으로 비교한다. 저자들은 F1-score를 성능 비교의 주 지표(primary metric)라고 하고, 임계값 설정에 영향을 받지 않는 AUC도 주 평가 기준(primary evaluation criterion)이라고 밝힌다.",
       "bridge": "그렇다면 이 설계가 실제로 통하는지 확인해야 한다.",
       "items": [
         { "kind": "claim", "text": "HDFS·BGL·Thunderbird·Hadoop의 1→1 전이 6쌍을 평가했다", "evidence": ["p13-s8", "p16-s3"] },
         { "kind": "claim", "text": "AIT-LDS v2.0의 두 기업 웹 로그로 기업 간 전이도 봤다", "evidence": ["p13-s23", "p13-s24"] },
         { "kind": "claim", "text": "지원 집합은 클래스당 20개, 결과는 5회 평균이다", "evidence": ["p14-s17", "p14-s21"] },
         { "kind": "claim", "text": "DeepLog·MetaLog·LogFormer 등 7개 방법과 비교했다", "evidence": ["p15-s5", "p15-s7", "p15-s12", "p15-s14"] },
-        { "kind": "claim", "text": "AUC를 임계값 영향이 없는 주 평가 기준으로 삼았다", "evidence": ["p16-s21", "p16-s22"] }
+        { "kind": "claim", "text": "F1-score를 성능 비교의 주 지표로 삼았다", "evidence": ["p15-s23", "p15-s24"] },
+        { "kind": "claim", "text": "임계값 영향이 없는 AUC도 주 평가 기준이라고 밝혔다", "evidence": ["p16-s21", "p16-s22"] }
       ]
     },
     {
@@ -232,7 +233,7 @@
         { "kind": "claim", "text": "온라인 스트림 학습·마이크로서비스 평가·LLM 결합을 예고했다", "evidence": ["p24-s9"] },
         { "kind": "claim", "label": "원문에서 더 볼 곳", "text": "APCL 손실 정의: 식 (11)–(13)과 그 설명", "evidence": ["p12-s9", "p12-s14", "p12-s16", "p12-s18"] },
         { "kind": "claim", "label": "원문에서 더 볼 곳", "text": "구성요소별 기여: Table 5 ablation", "evidence": ["p21-s4"] },
-        { "kind": "claim", "label": "원문에서 더 볼 곳", "text": "소스 코드는 Zenodo에 보관되어 있다", "evidence": ["p15-s2"] }
+        { "kind": "claim", "label": "코드 공개", "text": "소스 코드는 Zenodo에 보관되어 있다", "evidence": ["p15-s2"] }
       ]
     }
   ],
