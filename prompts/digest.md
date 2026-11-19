@@ -44,7 +44,8 @@
 | 9 | 시사점·다음 질문 | 내 연구에 주는 의미, 원문에서 더 볼 곳 |
 
 - 0은 `takeaway`, 1~9는 `cards`이며 `section` 값은 순서대로 `motivation, gap, idea, method, setup, results, analysis, limits, implications`다.
-- 논문 성격에 따라 섹션을 생략하거나 여러 카드로 나눌 수 있다. 카드 `id`는 `c1`, `c2`, … 순서대로 매긴다.
+- 논문 성격에 따라 섹션을 생략하거나 여러 카드로 나눌 수 있다. 카드 `id`는 `c1`, `c2`, … 로 고유하게 순서대로 매긴다.
+- `section`은 `motivation|gap|idea|method|setup|results|analysis|limits|implications` 중 하나만 쓴다. 목록 밖의 값은 `npm run check`가 문제로 보고한다.
 
 ## 4. 카드 형식
 
@@ -55,9 +56,12 @@
 
 - 원문 사실은 반드시 `kind: "claim"`으로 쓰고 `evidence`에 `source.json`에 실제로 있는 문장 ID를 1개 이상 넣는다. 없는 ID가 하나라도 있으면 검증에서 제거된다.
 - 해석·비판·시사점은 `kind: "opinion"`으로 쓴다(화면에 "💬 해석" 배지). 근거는 있으면 넣고 없어도 된다.
+- `takeaway.evidence`에는 실제 `source.json` 문장 ID를 1개 이상 반드시 넣는다. 비었거나 없는 ID가 있으면 `npm run check`가 "takeaway: 근거 확인 필요"로 보고하고 실패한다.
 - 원문에 없는 수치·주장은 쓰지 않는다. 확신이 없으면 쓰지 않는다.
 
 ## 6. 문장 길이
+
+길이 규칙은 권고이며 `npm run check`가 검사하지 않는다. 반면 evidence(claim·bigNumbers·takeaway), `section` 값, `figures[].page` 범위는 `npm run check`가 검사한다.
 
 - `answer`: 80자 이내.
 - `items[].text`: 60자 이내.
