@@ -10,7 +10,7 @@ from collections import Counter
 
 import pymupdf
 
-EXTRACTOR_VERSION = 1
+EXTRACTOR_VERSION = 2
 SCANNED_MESSAGE = "텍스트를 추출할 수 없습니다(스캔 PDF로 보입니다). OCR된 PDF로 바꿔주세요."
 MIN_CHARS_PER_PAGE = 50
 
@@ -219,6 +219,26 @@ def _rects(cmap, start, end, page_w, page_h):
     return rects
 
 
+def _to_pdf_matrix(page):
+    """Matrix from text-extraction coords to PDF user space.
+
+    PyMuPDF text bboxes are y-down, relative to the cropbox's top-left, and NOT rotated
+    (verified on 2.1), whereas page.transformation_matrix / rotation_matrix describe the
+    rotated display, so they are not usable here. Mediabox is assumed to start at (0, 0).
+    """
+    cb = page.cropbox_position
+    return pymupdf.Matrix(1, 0, 0, -1, cb.x, page.mediabox.height - cb.y)
+
+
+def _pdf_rects(rects, to_pdf):
+    """Screen rects -> PDF user space (bottom-left origin, unrotated page, mediabox coords)."""
+    out = []
+    for r in rects:
+        q = (pymupdf.Rect(r) * to_pdf).normalize()
+        out.append([_r1(q.x0), _r1(q.y0), _r1(q.x1), _r1(q.y1)])
+    return out
+
+
 # ------------------------------------------------------------------ main
 
 
@@ -235,7 +255,7 @@ def _extract(doc):
     total_chars = 0
     for pno, page in enumerate(doc, start=1):
         w, h = page.rect.width, page.rect.height
-        pages.append({"page": pno, "width": _num(w), "height": _num(h)})
+        pages.append({"page": pno, "width": _num(w), "height": _num(h), "rotation": page.rotation})
         raw = page.get_text("rawdict", flags=TEXT_FLAGS)
         items = []
         raw_blocks = [part for b in raw["blocks"] if b.get("type") == 0 for part in _split_caption_lines(b)]
@@ -251,7 +271,7 @@ def _extract(doc):
             first_line = text[:first_len].strip()
             items.append({"bbox": b["bbox"], "text": text, "cmap": cmap, "size": size,
                           "first_line": first_line})
-        page_blocks.append((pno, w, h, _order_blocks(items, w)))
+        page_blocks.append((pno, w, h, _to_pdf_matrix(page), _order_blocks(items, w)))
 
     if not pages or total_chars / len(pages) < MIN_CHARS_PER_PAGE:
         raise ScannedPdfError()
@@ -259,7 +279,7 @@ def _extract(doc):
     body_size = size_counts.most_common(1)[0][0]
     blocks, sentences, figures, seen_labels = [], {}, [], set()
     in_refs = False
-    for pno, w, h, items in page_blocks:
+    for pno, w, h, to_pdf, items in page_blocks:
         n = 0
         for item in items:
             text = item["text"]
@@ -280,11 +300,13 @@ def _extract(doc):
             for s, e in split_sentences(text):
                 n += 1
                 sid = f"p{pno}-s{n}"
+                rects = _rects(item["cmap"], s, e, w, h)
                 sentences[sid] = {
                     "text": text[s:e],
                     "page": pno,
                     "block": bid,
-                    "rects": _rects(item["cmap"], s, e, w, h),
+                    "rects": rects,
+                    "pdfRects": _pdf_rects(rects, to_pdf),
                 }
                 sids.append(sid)
             if not sids:

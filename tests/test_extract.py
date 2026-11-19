@@ -52,10 +52,10 @@ def test_ids_are_page_scoped_and_ordered(tmp_path):
     assert result["sentences"]["p1-s2"]["text"] == "Second sentence here."
     assert result["sentences"]["p2-s1"]["text"] == "Third sentence here."
     assert result["sentences"]["p2-s1"]["page"] == 2
-    assert result["extractorVersion"] == 1
+    assert result["extractorVersion"] == 2
     assert result["pages"] == [
-        {"page": 1, "width": 612, "height": 792},
-        {"page": 2, "width": 612, "height": 792},
+        {"page": 1, "width": 612, "height": 792, "rotation": 0},
+        {"page": 2, "width": 612, "height": 792, "rotation": 0},
     ]
     for block in result["blocks"]:
         for sid in block["sentenceIds"]:
@@ -306,5 +306,54 @@ def test_caption_label_variants(tmp_path):
 def test_records_pymupdf_version(tmp_path):
     pdf = make_pdf(tmp_path / "ver.pdf", [[((72, 72, 540, 120), FILLER, 10)]])
     result = extract(pdf)
-    assert result["extractorVersion"] == 1
+    assert result["extractorVersion"] == 2
     assert result["pymupdfVersion"] == pymupdf.__version__
+
+
+def make_rotated_pdf(path, rotation=0, text_at=(72, 100), cropbox=None):
+    """612x792 page; text inserted first, then rotation/cropbox applied (insertion is in unrotated space)."""
+    doc = pymupdf.open()
+    page = doc.new_page(width=612, height=792)
+    page.insert_text(text_at, "Hello world. Second sentence.", fontsize=11, fontname="helv")
+    page.insert_text((72, 400), FILLER, fontsize=11, fontname="helv")  # keep above the scanned threshold
+    if rotation:
+        page.set_rotation(rotation)
+    if cropbox:
+        page.set_cropbox(pymupdf.Rect(*cropbox))
+    doc.save(str(path / "rot.pdf"))
+    doc.close()
+    return str(path / "rot.pdf")
+
+
+def first_sentence(result):
+    return next(iter(result["sentences"].values()))
+
+
+def test_pdf_rects_unrotated_bottom_left(tmp_path):
+    src = extract(make_rotated_pdf(tmp_path, rotation=0))
+    r = first_sentence(src)["pdfRects"][0]
+    assert r[0] == pytest.approx(72, abs=2)
+    assert 792 - 100 - 2 <= r[3] <= 792 - 100 + 12   # top edge near baseline, flipped
+    assert r[1] < r[3]
+
+
+def test_pdf_rects_rotated_page_maps_back_to_unrotated_space(tmp_path):
+    src = extract(make_rotated_pdf(tmp_path, rotation=90))
+    assert src["pages"][0]["rotation"] == 90
+    r = first_sentence(src)["pdfRects"][0]
+    assert r[0] == pytest.approx(72, abs=2)
+    assert 792 - 100 - 2 <= r[3] <= 792 - 100 + 12
+
+
+def test_pdf_rects_respect_cropbox_offset(tmp_path):
+    src = extract(make_rotated_pdf(tmp_path, rotation=0, cropbox=(36, 36, 576, 756)))
+    r = first_sentence(src)["pdfRects"][0]
+    assert r[0] == pytest.approx(72, abs=2)   # PDF user space, not crop-relative
+
+
+@pytest.mark.parametrize("rotation", [0, 90, 180, 270])
+def test_pdf_rects_asymmetric_cropbox_all_rotations(tmp_path, rotation):
+    src = extract(make_rotated_pdf(tmp_path, rotation=rotation, cropbox=(20, 50, 500, 700)))
+    r = first_sentence(src)["pdfRects"][0]
+    assert r[0] == pytest.approx(72, abs=2)
+    assert 792 - 100 - 2 <= r[3] <= 792 - 100 + 12
