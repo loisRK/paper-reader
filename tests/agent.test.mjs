@@ -26,7 +26,7 @@ test('detect: exit 0 is available with version; ENOENT and failures give Korean 
   const r = await detectAgents({ run: failing });
   assert.equal(r[0].available, false);
   assert.equal(r[0].message, '실행할 수 없습니다: Error: boom');
-  // spawn error raised by a vendored binary (not the CLI itself missing) is "cannot run"
+  // a spawn ENOENT thrown for the CLI itself is reported as not installed
   const vendored = async () => { throw Object.assign(new Error('spawn /opt/x/vendor/codex ENOENT\n  at foo'), { code: 'ENOENT', path: '/opt/x/vendor/codex' }); };
   const v = await detectAgents({ run: vendored });
   assert.equal(v[0].message, '설치되어 있지 않습니다');
@@ -56,7 +56,7 @@ test('claude command: sandbox flags and settings file', () => {
   assert.ok(!args.includes('--bare'));
   const s = JSON.parse(files['.claude-settings.json']);
   assert.equal(s.permissions.blockWritesOutsideWorkingDirectories, true);
-  assert.deepEqual(s.permissions.deny, ['Bash', 'WebFetch', 'WebSearch']);
+  assert.deepEqual(s.permissions.deny, ['Bash', 'WebFetch', 'WebSearch', 'Read(~/**)']);
 });
 
 test('codex command: workspace-write sandbox, no network, cd into workdir', () => {
@@ -68,6 +68,8 @@ test('codex command: workspace-write sandbox, no network, cd into workdir', () =
   assert.ok(args.includes('--skip-git-repo-check'));
   assert.ok(args.includes("approval_policy='never'"));
   assert.ok(args.includes('sandbox_workspace_write.network_access=false'));
+  assert.ok(args.includes('sandbox_workspace_write.exclude_slash_tmp=true'));
+  assert.ok(args.includes('sandbox_workspace_write.exclude_tmpdir_env_var=true'));
   assert.equal(args[args.indexOf('--output-last-message') + 1], path.join('/w', '.last-message.txt'));
   assert.deepEqual(files, {});
   assert.throws(() => agentCommand('nope', { workdir: '/w', prompt: 'P' }));

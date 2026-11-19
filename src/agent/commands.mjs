@@ -5,7 +5,7 @@ import { fileURLToPath } from 'node:url';
 const promptFile = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'prompts', 'agent-digest.md');
 
 const CLAUDE_SETTINGS = {
-  permissions: { blockWritesOutsideWorkingDirectories: true, deny: ['Bash', 'WebFetch', 'WebSearch'] },
+  permissions: { blockWritesOutsideWorkingDirectories: true, deny: ['Bash', 'WebFetch', 'WebSearch', 'Read(~/**)'] },
 };
 
 export function agentCommand(id, { workdir, prompt }) {
@@ -37,6 +37,8 @@ export function agentCommand(id, { workdir, prompt }) {
         '--skip-git-repo-check',
         '-c', "approval_policy='never'",
         '-c', 'sandbox_workspace_write.network_access=false',
+        '-c', 'sandbox_workspace_write.exclude_slash_tmp=true',
+        '-c', 'sandbox_workspace_write.exclude_tmpdir_env_var=true',
         '--output-last-message', path.join(workdir, '.last-message.txt'),
       ],
       files: {},
