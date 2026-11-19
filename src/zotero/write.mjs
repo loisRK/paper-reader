@@ -45,6 +45,13 @@ export async function getServerInfo(cfg, opts = {}) {
   } catch {
     return { running: false, serverId: null, version: null, writable: false };
   }
+  // e.g. 403 when "allow other applications to communicate with Zotero" is off: not usable.
+  if (!res.ok) {
+    return {
+      running: false, serverId: null, version: null, writable: false,
+      message: `Zotero 로컬 API가 응답하지 않습니다(HTTP ${res.status}). Zotero 설정에서 로컬 API를 켜 주세요.`,
+    };
+  }
   return parseInfo(res);
 }
 
@@ -105,10 +112,11 @@ export function createZoteroWriter(cfg, opts = {}) {
   }
 
   // 412 on a response: other server => server-changed, same server => version conflict.
-  async function check412(res, id) {
+  // Reads only reset the cached info: stored keys are per server id, so they stay valid.
+  async function check412(res, id, { keepKeys = false } = {}) {
     const seen = res.headers.get('Zotero-Server-ID');
     if (seen && seen !== id) {
-      await dropKeys(id);
+      if (!keepKeys) await dropKeys(id);
       info = null;
       throw new ZoteroWriteError('server-changed', 'Zotero 서버가 바뀌었습니다. 다시 인가해 주세요.', { status: 412 });
     }
@@ -177,7 +185,7 @@ export function createZoteroWriter(cfg, opts = {}) {
     const res = await call(fetchImpl, `${base}${pathname}`, {
       headers: { ...(id ? { 'Zotero-Server-ID': id } : {}), ...headers },
     });
-    if (res.status === 412 && id) await check412(res, id);
+    if (res.status === 412 && id) await check412(res, id, { keepKeys: true });
     return res;
   }
 

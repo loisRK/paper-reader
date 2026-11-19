@@ -291,7 +291,7 @@ async function runSync(outputDir, id, { source, cards, writer, serverInfo }) {
   const pending = await readPending(outputDir, id);
   const done = (status, message = null) => ({ status, pending: pending.ops.length, message });
 
-  if (!serverInfo?.running) return done('offline');
+  if (!serverInfo?.running) return done('offline', serverInfo?.message ?? null);
   const { itemKey, attachmentKey } = source?.zotero ?? {};
   if (!itemKey || !attachmentKey) return done('offline', '이 논문은 Zotero 항목과 연결되어 있지 않습니다.');
 

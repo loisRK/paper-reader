@@ -23,7 +23,7 @@
 
 ### Zotero 로컬 API 켜기
 
-Zotero 7 이상에서 **설정(Settings) → 고급(Advanced) → "이 컴퓨터의 다른 애플리케이션이 Zotero와 통신하도록 허용"**(Allow other applications on this computer to communicate with Zotero)을 켜세요. 이 도구는 Zotero가 실행 중일 때 `http://127.0.0.1:23119`의 로컬 API로만 통신합니다.
+Zotero 7 이상에서 **설정(Settings) → 고급(Advanced) → "이 컴퓨터의 다른 애플리케이션이 Zotero와 통신하도록 허용"**(Allow other applications on this computer to communicate with Zotero)을 켜세요. 이 도구는 Zotero가 실행 중일 때 `http://127.0.0.1:23119`의 로컬 API로만 통신합니다. 이 설정이 꺼져 있으면 Zotero가 실행 중이어도 읽기 앱에는 `Zotero 연결 대기 중`과 함께 `Zotero 로컬 API가 응답하지 않습니다(HTTP 403)` 안내가 표시됩니다.
 
 ## 설치
 
@@ -130,7 +130,7 @@ npm run reader                                # 읽기 앱: http://127.0.0.1:517
 ### 안전장치
 
 - 읽기 앱은 **자신이 만든 항목(태그 `paper-reader`)만** 고치거나 지웁니다. 내가 Zotero에서 직접 만든 주석은 건드리지 않습니다.
-- Zotero가 꺼져 있어도 메모는 이 컴퓨터(`<outputDir>/<id>/notes.json`, 보낼 목록 `pending.json`)에 저장되고, 화면에 `Zotero 연결 대기 중`으로 표시됩니다. Zotero를 켜면 자동으로 전송됩니다.
+- Zotero가 꺼져 있어도 메모는 이 컴퓨터(`<outputDir>/<id>/notes.json`, 보낼 목록 `pending.json`)에 저장되고, 화면에 `Zotero 연결 대기 중`으로 표시됩니다. Zotero를 켠 뒤 그 논문을 읽기 앱에서 열어 두면 약 5초마다 자동으로 전송됩니다(논문을 열지 않으면 보내지 않습니다).
 - 같은 항목을 양쪽에서 고쳤다면 **Zotero 내용이 우선**이며, 읽기 앱에는 내가 쓴 내용이 함께 표시됩니다. 노트는 충돌 안내가 뜨고 `내 메모로 덮어쓰기` / `Zotero 내용 유지` 중에 고릅니다.
 - **예제 논문**에는 메모를 저장하지 않습니다.
 

@@ -127,6 +127,16 @@ test('addHighlight saves locally and queues one op even when Zotero is offline',
   assert.equal(w.calls.length, 0);
 });
 
+test('Zotero not usable (getServerInfo running:false with message) → offline, message passed through', async () => {
+  const dir = await tmp();
+  await setCardMemo(dir, ID, 'c1', 'memo');
+  const w = fakeWriter();
+  const r = await syncPaper(dir, ID, { source, cards, writer: w, serverInfo: { running: false, serverId: null, version: null, writable: false, message: 'Zotero 로컬 API가 응답하지 않습니다(HTTP 403).' } });
+  assert.equal(r.status, 'offline');
+  assert.equal(r.message, 'Zotero 로컬 API가 응답하지 않습니다(HTTP 403).');
+  assert.equal(w.calls.length, 0);
+});
+
 test('readNotes/readPending return defaults; write is atomic and round-trips', async () => {
   const dir = await tmp();
   const notes = await readNotes(dir, ID);

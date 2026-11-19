@@ -128,6 +128,21 @@ test('412 with different Zotero-Server-ID -> server-changed and old key cleared'
   assert.equal(await store.get(SID), null);
 });
 
+test('412 with different Zotero-Server-ID on a READ -> server-changed, stored key kept, info refetched', async () => {
+  const store = memStore({ [SID]: 'K' });
+  let infoCalls = 0;
+  const f = fakeFetch((u) => {
+    if (u.endsWith('/api/')) { infoCalls += 1; return res(200, '', { 'Zotero-Server-ID': SID, 'X-Zotero-Version': '10.0.1' }); }
+    if (u.includes('/items/ABCD1234')) return res(412, '', { 'Zotero-Server-ID': 'server-B' });
+  });
+  const w = createZoteroWriter(CFG, { fetchImpl: f, authStore: store });
+  await w.serverId();
+  await rejectsCode(w.getItem('ABCD1234'), 'server-changed');
+  assert.equal(await store.get(SID), 'K', 'keys are per server id; a read never deletes them');
+  await w.serverId();
+  assert.equal(infoCalls, 2, 'server info was reset');
+});
+
 test('412 with same Zotero-Server-ID on patch -> http 412 version conflict, key kept', async () => {
   const store = memStore({ [SID]: 'K' });
   const f = fakeFetch((u) => { if (u.includes('/items/ABCD1234')) return res(412, '', { 'Zotero-Server-ID': SID }); });
@@ -230,6 +245,14 @@ test('every request carries a timeout signal; abort/timeout -> offline', async (
     await rejectsCode(w2.patchItem('X', 1, {}), 'offline');
     await rejectsCode(w2.getItem('X'), 'offline');
   }
+});
+
+test('getServerInfo: non-2xx /api/ (e.g. 403 local API disabled) -> not running, with message', async () => {
+  const f = fakeFetch((u) => { if (u.endsWith('/api/')) return res(403, 'Forbidden', { 'Zotero-Server-ID': SID, 'X-Zotero-Version': '10.0.1' }); });
+  const info = await getServerInfo(CFG, { fetchImpl: f });
+  assert.equal(info.running, false);
+  assert.equal(info.writable, false);
+  assert.match(info.message, /로컬 API/);
 });
 
 test('getServerInfo reads id and version; major < 10 is not writable', async () => {
