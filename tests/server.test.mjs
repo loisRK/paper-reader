@@ -367,3 +367,21 @@ test('paper endpoint and readPaper expose needsReextract', async (t) => {
   assert.equal((await readPaper(d, 'q', { examplesDir: null })).needsReextract, false);
   assert.equal((await readPaper(path.join(d, 'none'), 'n1', { examplesDir: null })), null);
 });
+
+test('authorize requires application/json (415 for text/plain, no dialog)', async (t) => {
+  const { b, req, zcalls } = await notesServer(t);
+  const bad = await fetch(`${b}/api/zotero/authorize`, { method: 'POST', headers: { 'content-type': 'text/plain' }, body: '{}' });
+  assert.equal(bad.status, 415);
+  assert.equal(zcalls.authorize, 0);
+  assert.equal((await req('POST', '/api/zotero/authorize', {})).status, 200);
+  assert.equal(zcalls.authorize, 1);
+});
+
+test('card memo for unknown or special cardId → 404', async (t) => {
+  const { req } = await notesServer(t);
+  for (const c of ['__proto__', 'constructor', 'nope']) {
+    const r = await req('PUT', `/api/papers/n1/card-memos/${c}`, { text: 'x' });
+    assert.equal(r.status, 404, c);
+    assert.equal((await r.json()).error, '요약 카드를 찾을 수 없습니다.');
+  }
+});

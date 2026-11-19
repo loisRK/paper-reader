@@ -80,6 +80,7 @@ export function createNotesRoutes(cfg, { out, opts, fetchImpl, zotero }, helpers
   // Returns true when the request was handled.
   return async function handle(req, res, parts, method) {
     if (parts[1] === 'zotero' && parts[2] === 'authorize' && parts.length === 3 && method === 'POST') {
+      await readBody(req); // content-type guard: blocks cross-origin text/plain form posts
       try {
         const { remember } = await writer.authorize();
         sendJson(res, 200, { ok: true, remember: Boolean(remember) });
@@ -126,7 +127,9 @@ export function createNotesRoutes(cfg, { out, opts, fetchImpl, zotero }, helpers
     if (section === 'card-memos' && parts.length === 5 && method === 'PUT') {
       const id = checkName(rawId, 'id');
       const cardId = checkName(rawSub, '카드 id');
-      await loadPaper(id, { write: true });
+      const b = await loadPaper(id, { write: true });
+      const cardIds = new Set((validated(b).digest?.cards ?? []).map((c) => c.id));
+      if (!cardIds.has(cardId)) throw new HttpError(404, '요약 카드를 찾을 수 없습니다.');
       const body = await readBody(req);
       if (typeof body?.text !== 'string' || body.text.length > MAX_MEMO) {
         throw new HttpError(400, `text는 ${MAX_MEMO}자 이하의 문자열이어야 합니다.`);
