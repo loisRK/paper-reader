@@ -14,6 +14,7 @@ const resolved = {
 };
 const extracted = {
   extractorVersion: 1,
+  pymupdfVersion: '2.1',
   pages: [{ page: 1, width: 612, height: 792 }, { page: 2, width: 612, height: 792 }],
   blocks: [{ id: 'b1', type: 'caption', page: 1, sentenceIds: ['p1-s1', 'p1-s2'] }],
   sentences: {
@@ -64,7 +65,7 @@ test('merges id, zotero keys and meta into <outputDir>/<id>/source.json', async 
   assert.equal(saved.id, 'kim2025reader');
   assert.deepEqual(saved.zotero, { itemKey: 'H9RA4VSE', attachmentKey: 'IG8JQQUI' });
   assert.equal(saved.meta.title, 'A Reader Paper');
-  assert.deepEqual(Object.keys(saved), ['extractorVersion', 'id', 'zotero', 'meta', 'pages', 'blocks', 'sentences', 'figures']);
+  assert.deepEqual(Object.keys(saved), ['extractorVersion', 'pymupdfVersion', 'id', 'zotero', 'meta', 'pages', 'blocks', 'sentences', 'figures']);
   assert.deepEqual(saved.sentences, extracted.sentences);
 
   const out = logs.join('\n');
@@ -114,4 +115,27 @@ test('resolveItem failure and missing argument exit 1', async () => {
   assert.ok(errors.join('\n').includes("'NOPE' 항목을 찾지 못했습니다"));
   assert.equal(await main([], opts), 1);
   assert.match(errors.at(-1), /사용법: npm run extract -- <citekey\|itemKey>/);
+});
+
+test('broken JSON output or unwritable outputDir prints a one-line error and exits 1', async () => {
+  const { dir, errors, opts } = await setup();
+  const broken = await main(['H9RA4VSE'], {
+    ...opts,
+    resolveItem: async () => resolved,
+    runPython: async (_py, args) => { await fs.writeFile(args[2], '{not json'); return { code: 0, stderr: '' }; },
+  });
+  assert.equal(broken, 1);
+  assert.match(errors.at(-1), /^추출 결과를 저장하지 못했습니다: /);
+  assert.equal(errors.at(-1).includes('\n'), false);
+
+  const blocker = path.join(dir, 'blocker');
+  await fs.writeFile(blocker, '');
+  const unwritable = await main(['H9RA4VSE'], {
+    ...opts,
+    cfg: { outputDir: blocker },
+    resolveItem: async () => resolved,
+    runPython: async (_py, args) => { await fs.writeFile(args[2], JSON.stringify(extracted)); return { code: 0, stderr: '' }; },
+  });
+  assert.equal(unwritable, 1);
+  assert.match(errors.at(-1), /^추출 결과를 저장하지 못했습니다: /);
 });

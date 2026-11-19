@@ -15,7 +15,9 @@ SCANNED_MESSAGE = "텍스트를 추출할 수 없습니다(스캔 PDF로 보입�
 MIN_CHARS_PER_PAGE = 50
 
 HEADING_NUMBER_RE = re.compile(r"^\d+(\.\d+)*\s+[A-Z]")
-CAPTION_RE = re.compile(r"^(Fig\.?|Figure|Table)\s*(\d+)")
+# Caption only if the number is followed by "." / ":" / "|" or ends the first line
+# ("Figure 2 shows ..." is a body paragraph).
+CAPTION_RE = re.compile(r"^(Fig\.?|Figure|Table)\s*(\d+)\s*(?:[.:|]|$)")
 # A caption line merged into a figure's text block ("... Figure 4. Revoke ...") starts a new block.
 CAPTION_LINE_RE = re.compile(r"^\s*(Fig\.?|Figure|Table)\s*\d+[.:]")
 CAPTION_LABEL_RE = re.compile(r"(Fig\.?|Figure|Table)\s*\d+[.:]?")
@@ -244,7 +246,11 @@ def _extract(doc):
             total_chars += len(text)
             size_counts.update(sizes)
             size = sizes.most_common(1)[0][0] if sizes else 0
-            items.append({"bbox": b["bbox"], "text": text, "cmap": cmap, "size": size})
+            first_li = cmap[0][0]
+            first_len = next((i for i, (li, _) in enumerate(cmap) if li != first_li), len(text))
+            first_line = text[:first_len].strip()
+            items.append({"bbox": b["bbox"], "text": text, "cmap": cmap, "size": size,
+                          "first_line": first_line})
         page_blocks.append((pno, w, h, _order_blocks(items, w)))
 
     if not pages or total_chars / len(pages) < MIN_CHARS_PER_PAGE:
@@ -258,7 +264,7 @@ def _extract(doc):
         for item in items:
             text = item["text"]
             big = item["size"] >= body_size * HEADING_SIZE_RATIO - 1e-6
-            cap = CAPTION_RE.match(text)
+            cap = CAPTION_RE.match(item["first_line"])
             if REFERENCES_RE.match(text):
                 btype, in_refs = "heading", True
             elif in_refs:
@@ -292,6 +298,7 @@ def _extract(doc):
 
     return {
         "extractorVersion": EXTRACTOR_VERSION,
+        "pymupdfVersion": pymupdf.__version__,
         "pages": pages,
         "blocks": blocks,
         "sentences": sentences,

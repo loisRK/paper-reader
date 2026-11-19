@@ -157,7 +157,7 @@ def test_caption_becomes_figure(tmp_path):
 def test_fig_abbrev_and_table_labels_are_normalized(tmp_path):
     pdf = make_pdf(tmp_path / "fig2.pdf", [[
         ((72, 72, 540, 120), "Fig. 3. Results across sites.", 10),
-        ((72, 200, 540, 240), "Table 1 Participant characteristics.", 10),
+        ((72, 200, 540, 240), "Table 1\nParticipant characteristics.", 10),
         ((72, 300, 540, 360), FILLER, 10),
     ]])
     labels = [f["label"] for f in extract(pdf)["figures"]]
@@ -278,3 +278,33 @@ def test_long_numbered_row_is_not_heading_and_jittered_title_is(tmp_path):
     types = [b["type"] for b in extract(pdf)["blocks"]]
     assert types[0] == "heading"
     assert types[-1] == "paragraph"
+
+
+def test_body_paragraph_starting_with_figure_is_not_caption(tmp_path):
+    pdf = make_pdf(tmp_path / "figbody.pdf", [
+        [((72, 72, 540, 120), "Figure 2 shows the pipeline we built. It works well.", 10),
+         ((72, 300, 540, 360), FILLER, 10)],
+        [((72, 72, 540, 120), "Figure 2. Overview of pipeline.", 10),
+         ((72, 300, 540, 360), FILLER, 10)],
+    ])
+    result = extract(pdf)
+    assert result["figures"] == [{"label": "Figure 2", "page": 2, "captionSentenceId": "p2-s1"}]
+    assert [b["type"] for b in result["blocks"]] == ["paragraph", "paragraph", "caption", "paragraph"]
+
+
+def test_caption_label_variants(tmp_path):
+    pdf = make_pdf(tmp_path / "capvar.pdf", [[
+        ((72, 72, 540, 100), "Figure 3: Colon caption.", 10),
+        ((72, 120, 540, 150), "Table 4 | Pipe caption.", 10),
+        ((72, 170, 540, 200), "Table 5 lists the sites we used.", 10),
+        ((72, 300, 540, 360), FILLER, 10),
+    ]])
+    result = extract(pdf)
+    assert [f["label"] for f in result["figures"]] == ["Figure 3", "Table 4"]
+
+
+def test_records_pymupdf_version(tmp_path):
+    pdf = make_pdf(tmp_path / "ver.pdf", [[((72, 72, 540, 120), FILLER, 10)]])
+    result = extract(pdf)
+    assert result["extractorVersion"] == 1
+    assert result["pymupdfVersion"] == pymupdf.__version__

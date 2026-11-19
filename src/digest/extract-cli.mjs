@@ -22,6 +22,8 @@ function defaultRunPython(python, args) {
   });
 }
 
+const saveError = (err) => `추출 결과를 저장하지 못했습니다: ${String(err?.message ?? err).split('\n')[0]}`;
+
 export async function main(argv = process.argv.slice(2), opts = {}) {
   const {
     resolveItem = defaultResolveItem,
@@ -61,22 +63,30 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
       return 1;
     }
     extracted = JSON.parse(await fs.readFile(tmpFile, 'utf8'));
+  } catch (err) {
+    error(saveError(err));
+    return 1;
   } finally {
     await fs.rm(tmpDir, { recursive: true, force: true });
   }
 
-  const { extractorVersion, ...rest } = extracted;
+  const { extractorVersion, pymupdfVersion, ...rest } = extracted;
   const source = {
     extractorVersion,
+    pymupdfVersion,
     id: item.id,
     zotero: { itemKey: item.itemKey, attachmentKey: item.attachmentKey },
     meta: item.meta,
     ...rest,
   };
-  const outDir = path.join(cfg.outputDir, item.id);
-  await fs.mkdir(outDir, { recursive: true });
-  const outFile = path.join(outDir, 'source.json');
-  await fs.writeFile(outFile, `${JSON.stringify(source, null, 1)}\n`);
+  const outFile = path.join(cfg.outputDir, item.id, 'source.json');
+  try {
+    await fs.mkdir(path.dirname(outFile), { recursive: true });
+    await fs.writeFile(outFile, `${JSON.stringify(source, null, 1)}\n`);
+  } catch (err) {
+    error(saveError(err));
+    return 1;
+  }
 
   const nSentences = Object.keys(source.sentences ?? {}).length;
   log(`저장: ${outFile}`);
@@ -86,5 +96,10 @@ export async function main(argv = process.argv.slice(2), opts = {}) {
 }
 
 if (process.argv[1] && fileURLToPath(import.meta.url) === path.resolve(process.argv[1])) {
-  process.exitCode = await main();
+  try {
+    process.exitCode = await main();
+  } catch (err) {
+    console.error(saveError(err));
+    process.exitCode = 1;
+  }
 }
