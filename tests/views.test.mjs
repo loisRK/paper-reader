@@ -198,3 +198,22 @@ test('acknowledged: remote applied, no resend', () => {
   assert.equal(shouldApplyRemote(idle), true);
   assert.equal(needsResend(idle), false);
 });
+
+import { isRetryable, shouldPollRetry, shouldToast } from '../src/reader/public/views/card-memos.js';
+test('permanent failure: no poll retry, remote still ignored', () => {
+  assert.equal(isRetryable(404), false);
+  assert.equal(isRetryable(403), false);
+  const st = { dirty: false, failed: true, permanent: true, saving: 0, focused: false };
+  assert.equal(shouldPollRetry(st), false);
+  assert.equal(shouldApplyRemote(st), false);
+  assert.equal(needsResend(st), true); // blur / user edit may still retry
+});
+test('retryable failure: poll retries', () => {
+  for (const s of [undefined, 0, 500, 503, 408, 429]) assert.equal(isRetryable(s), true);
+  assert.equal(shouldPollRetry({ failed: true, permanent: false, saving: 0 }), true);
+  assert.equal(shouldPollRetry({ failed: true, permanent: false, saving: 1 }), false);
+});
+test('toast only on first failure', () => {
+  assert.equal(shouldToast({ wasFailed: false }), true);
+  assert.equal(shouldToast({ wasFailed: true }), false);
+});

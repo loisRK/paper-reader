@@ -18,7 +18,7 @@ function toast(message) {
 async function api(url, init) {
   const res = await fetch(url, init);
   const body = res.status === 204 ? null : await res.json().catch(() => null);
-  if (!res.ok) throw new Error(body?.error ?? `HTTP ${res.status}`);
+  if (!res.ok) throw Object.assign(new Error(body?.error ?? `HTTP ${res.status}`), { status: res.status });
   return body;
 }
 

@@ -26,6 +26,11 @@ export const memosVisible = (mode, example) => mode === '10min' && !example;
 
 // Local text wins over polled text while it is unsent, failed, in flight, or being typed.
 export const shouldApplyRemote = ({ dirty, failed, saving, focused }) => !(dirty || failed || saving > 0 || focused);
+// Network errors (no status), 5xx, 408 and 429 may succeed later; other 4xx never will.
+export const isRetryable = (status) => !status || status >= 500 || status === 408 || status === 429;
+// Polls retry only failures that can heal; toast only when entering the failed state.
+export const shouldPollRetry = ({ failed, permanent, saving }) => Boolean(failed && !permanent && !(saving > 0));
+export const shouldToast = ({ wasFailed }) => !wasFailed;
 // A card whose latest text the server has not acknowledged must be sent again.
 export const needsResend = ({ dirty, failed }) => Boolean(dirty || failed);
 
@@ -41,7 +46,7 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
   function stateOf(cardId) {
     let st = cards.get(cardId);
     if (!st) {
-      st = { text: '', dirty: false, failed: false, saving: 0, chain: Promise.resolve(), area: null, status: null, details: null };
+      st = { text: '', dirty: false, failed: false, permanent: false, saving: 0, chain: Promise.resolve(), area: null, status: null, details: null };
       st.d = debounce(() => enqueue(cardId, st), SAVE_MS);
       cards.set(cardId, st);
     }
@@ -61,11 +66,14 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
     try {
       await actions.saveCardMemo(id, cardId, value);
       st.failed = false;
+      st.permanent = false;
       if (st.text === value) { st.dirty = false; label(st, '저장됨'); }
     } catch (err) {
+      const wasFailed = st.failed;
       st.failed = true;
+      st.permanent = !isRetryable(err.status);
       label(st, '저장 실패');
-      actions.toast(`메모를 저장하지 못했습니다: ${err.message}`);
+      if (shouldToast({ wasFailed })) actions.toast(`메모를 저장하지 못했습니다: ${err.message}`);
     } finally {
       st.saving -= 1;
     }
@@ -150,7 +158,7 @@ export function setupCardMemos({ id, actions, example = false, getMode, refresh 
       }
       // Zotero is reachable again: retry failed cards (at most once per poll).
       if (notes?.status === 'connected') {
-        for (const [cardId, st] of cards) if (st.failed && !st.saving) resend(cardId, st);
+        for (const [cardId, st] of cards) if (shouldPollRetry(st)) resend(cardId, st);
       }
     },
     dispose() {
