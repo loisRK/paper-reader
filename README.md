@@ -85,7 +85,7 @@ cp paper-reader.config.example.json paper-reader.config.json
 |---|---|---|
 | Claude Code | `claude --version` | `--permission-mode dontAsk`, 허용 도구 Read·Write·Edit·Glob·Grep만. Bash·WebFetch·WebSearch 금지, 작업 폴더 밖 쓰기 금지, 홈 폴더 읽기 금지. |
 | Codex | `codex --version` | `codex exec --sandbox workspace-write`, 네트워크 끔, 쓰기는 작업 폴더만. |
-| Gemini CLI | `gemini --version` (0.40 이상 1.0 미만만) | `gemini -p … --approval-mode auto_edit --policy <작업 폴더 정책>`. 정책 파일이 모든 도구를 막고, 작업 폴더의 입력 파일 읽기와 `digest.json` 쓰기만 허용합니다. 셸(`run_shell_command`)·웹(`web_fetch`, `google_web_search`)·MCP·확장·훅 금지. 범위 밖 버전은 `안전하게 실행할 수 없는 버전입니다`로 표시되고 쓸 수 없습니다. |
+| Gemini CLI | `gemini --version` (0.46 이상 1.0 미만만) | `gemini -p … --approval-mode auto_edit --policy <작업 폴더 정책>`. 정책 파일이 모든 도구를 막고, 작업 폴더의 입력 파일 읽기와 `digest.json` 쓰기만 허용합니다. 셸(`run_shell_command`)·웹(`web_fetch`, `google_web_search`)·MCP·확장·훅 금지. 범위 밖 버전은 `안전하게 실행할 수 없는 버전입니다`로 표시되고 쓸 수 없습니다. |
 
 도구 칸 아래에는 **설정된 모델**(각 도구의 설정 파일 `~/.claude/settings.json`의 `model`(또는 `ANTHROPIC_MODEL`), `~/.codex/config.toml`의 `model`, `~/.gemini/settings.json`의 `model.name`을 읽기만 함, 없으면 `기본값 (계정 플랜에 따라 정해짐)`)과 **최근 실행**(마지막 실행 때 도구가 알려 준 모델과 시각, `data/settings.json`의 `lastModels`)이 표시됩니다.
 

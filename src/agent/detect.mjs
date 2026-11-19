@@ -5,7 +5,7 @@ export const AGENTS = [
   { id: 'claude', name: 'Claude Code', cmd: 'claude' },
   { id: 'codex', name: 'Codex', cmd: 'codex' },
   // Policy/settings keys we write were checked against 0.46; outside this range they may mean something else.
-  { id: 'gemini', name: 'Gemini CLI', cmd: 'gemini', range: { min: [0, 40], below: [1, 0] } },
+  { id: 'gemini', name: 'Gemini CLI', cmd: 'gemini', range: { min: [0, 46], below: [1, 0] } },
 ];
 
 function inRange(version, { min, below }) {

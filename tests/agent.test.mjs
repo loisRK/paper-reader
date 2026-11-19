@@ -120,17 +120,18 @@ function decide(rules, name, args) {
   return hit?.decision ?? 'none';
 }
 
-test('detect: gemini is the third tool; version range >=0.40 <1, else unsafe', async () => {
+test('detect: gemini is the third tool; version range >=0.46 <1, else unsafe', async () => {
   const runFor = (ver) => async (cmd) => (cmd === 'gemini' ? { code: 0, stdout: `${ver}\n`, stderr: '' } : { code: 0, stdout: '1.0.0\n', stderr: '' });
   const ok = await detectAgents({ run: runFor('0.46.0') });
   assert.deepEqual(ok.map((a) => a.id), ['claude', 'codex', 'gemini']);
   assert.deepEqual(ok[2], { id: 'gemini', name: 'Gemini CLI', available: true, version: '0.46.0' });
-  for (const v of ['0.39.9', '1.0.0', '2.3.1', 'nightly']) {
+  for (const v of ['0.39.9', '0.40.0', '0.45.9', '1.0.0', '2.3.1', 'nightly']) {
     const g = (await detectAgents({ run: runFor(v) }))[2];
     assert.equal(g.available, false, v);
     assert.match(g.message, /^안전하게 실행할 수 없는 버전입니다/, v);
   }
-  assert.equal((await detectAgents({ run: runFor('0.40.0') }))[2].available, true);
+  assert.equal((await detectAgents({ run: runFor('0.46.0') }))[2].available, true);
+  assert.equal((await detectAgents({ run: runFor('0.52.1') }))[2].available, true);
 });
 
 test('gemini command: headless, auto_edit, our policy file, no extensions/MCP, workspace trust', () => {
