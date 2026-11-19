@@ -1,7 +1,8 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
-import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds } from '../src/reader/public/views/paper.js';
+import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
+import { nextZoom, pagesToDraw } from '../src/reader/public/views/pdf-view.js';
 import { progressPercent } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
@@ -373,4 +374,33 @@ test('figureLayout: 캡션 블록은 접지 않고, 블록당 역할은 하나',
   assert.equal(m.get('a').figure.label, 'Figure 1');
   assert.equal(m.get('d').figure.label, 'Figure 2');
   assert.equal(m.size, 4);
+});
+
+test('initialSourceTab: PDF 없음 → text, 기억한 text → text, 그 외 pdf', () => {
+  assert.equal(initialSourceTab({ hasPdf: false, stored: 'pdf' }), 'text');
+  assert.equal(initialSourceTab({ hasPdf: false, stored: null }), 'text');
+  assert.equal(initialSourceTab({ hasPdf: true, stored: 'text' }), 'text');
+  assert.equal(initialSourceTab({ hasPdf: true, stored: 'pdf' }), 'pdf');
+  assert.equal(initialSourceTab({ hasPdf: true, stored: null }), 'pdf');
+  assert.equal(initialSourceTab({ hasPdf: true, stored: 'garbage' }), 'pdf');
+});
+
+test('nextZoom: 0.1 단계로 맞추고 50%–300%로 묶는다', () => {
+  assert.equal(nextZoom(1, 'in'), 1.1);
+  assert.equal(nextZoom(1, 'out'), 0.9);
+  assert.equal(nextZoom(0.86, 'in'), 0.9);
+  assert.equal(nextZoom(0.86, 'out'), 0.8);
+  assert.equal(nextZoom(0.5, 'out'), 0.5);
+  assert.equal(nextZoom(3, 'in'), 3);
+  assert.equal(nextZoom(2.95, 'in'), 3);
+  assert.equal(nextZoom(0.2, 'in'), 0.5);
+  assert.equal(nextZoom(0.7000000001, 'in'), 0.8);
+  assert.equal(nextZoom(0.6999999999, 'out'), 0.6);
+});
+
+test('pagesToDraw: 보이는 쪽 ±1, 1..쪽 수 안', () => {
+  assert.deepEqual([...pagesToDraw([1], 10)], [1, 2]);
+  assert.deepEqual([...pagesToDraw([4, 5], 10)], [3, 4, 5, 6]);
+  assert.deepEqual([...pagesToDraw([10], 10)], [9, 10]);
+  assert.deepEqual([...pagesToDraw([], 10)], []);
 });

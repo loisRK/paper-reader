@@ -16,7 +16,8 @@ function makeViewport(view, scale, rotation) {
   const apply = (x, y) => [m[0] * x + m[2] * y + m[4], m[1] * x + m[3] * y + m[5]];
   return {
     width, height,
-    convertToViewportRectangle([ax, ay, bx, by]) { return [...apply(ax, ay), ...apply(bx, by)]; },
+    // PDF.js 6.5 PageViewport has convertToViewportPoint but no convertToViewportRectangle.
+    convertToViewportPoint(x, y) { return apply(x, y); },
     convertToPdfPoint(x, y) {
       const det = m[0] * m[3] - m[1] * m[2];
       const dx = x - m[4]; const dy = y - m[5];

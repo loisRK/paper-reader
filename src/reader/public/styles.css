@@ -269,6 +269,74 @@ body.paper-mode #app { max-width: none; padding: 0; }
 .src-figure.flash { box-shadow: 0 0 0 3px var(--hl-ring, var(--accent)); }
 .fig-fail { font-size: .88rem; }
 .fig-show { margin-left: .5rem; }
+/* source tabs: [PDF] [글로 읽기] */
+.src-top { position: sticky; top: 0; z-index: 2; background: color-mix(in srgb, var(--surface) 80%, transparent); -webkit-backdrop-filter: saturate(180%) blur(20px); backdrop-filter: saturate(180%) blur(20px); border-bottom: 1px solid var(--line); }
+.src-top .sheet-bar { position: static; background: transparent; -webkit-backdrop-filter: none; backdrop-filter: none; }
+.src-tabs { display: flex; padding: .5rem 1rem; }
+.src-tab { font: inherit; font-size: .88rem; padding: .3rem .9rem; border: 1px solid var(--line); background: transparent; color: var(--text); cursor: pointer; }
+.src-tab:first-child { border-radius: 999px 0 0 999px; }
+.src-tab:last-child { border-radius: 0 999px 999px 0; margin-left: -1px; }
+.src-tab:hover { background: var(--accent-soft); border-color: var(--accent); }
+.src-tab[aria-selected="true"] { background: var(--accent); border-color: var(--accent); color: var(--on-accent); }
+.src-tab:focus-visible { outline: 2px solid var(--focus); outline-offset: 2px; position: relative; }
+.source.tab-pdf { display: flex; flex-direction: column; overflow: hidden; }
+.source.tab-pdf .src-top { flex: none; }
+.source.tab-pdf .src-pane-pdf:not([hidden]) { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+
+/* PDF view: pages keep their original colours in dark mode */
+.pdf-view { flex: 1; min-height: 0; display: flex; flex-direction: column; }
+.pdf-toolbar { flex: none; display: flex; align-items: center; gap: .35rem; padding: .35rem 1rem; border-bottom: 1px solid var(--line); font-size: .85rem; }
+.pdf-zoom-btn { padding: .2rem .65rem; font-size: .85rem; min-width: 2.2rem; }
+.pdf-zoom-label { min-width: 3.2rem; text-align: center; font-variant-numeric: tabular-nums; }
+.pdf-page-label { margin-left: auto; font-variant-numeric: tabular-nums; }
+.pdf-scroll { flex: 1; min-height: 0; overflow: auto; overscroll-behavior: contain; background: var(--surface-2); }
+.pdf-scroll:focus-visible { outline: 2px solid var(--focus); outline-offset: -2px; }
+.pdf-status { padding: 1.5rem; margin: 0; }
+.pdf-pages { width: max-content; min-width: 100%; padding: 12px; }
+.pdf-page {
+  --user-unit: 1; --total-scale-factor: calc(var(--scale-factor) * var(--user-unit));
+  --scale-round-x: 1px; --scale-round-y: 1px;
+  position: relative; margin: 0 auto 12px; background: #fff; color-scheme: only light;
+  box-shadow: 0 0 0 1px var(--line); direction: ltr;
+}
+.pdf-page canvas { position: absolute; inset: 0; width: 100%; height: 100%; display: block; }
+.pdf-marks { position: absolute; inset: 0; pointer-events: none; }
+.pdf-marks > div { position: absolute; border-radius: 2px; mix-blend-mode: multiply; }
+.pdf-ev { background: color-mix(in srgb, var(--hl-ring) 20%, transparent); }
+.pdf-mark-mine { background: color-mix(in srgb, var(--mark, #ffd400) 45%, transparent); }
+.pdf-mark-zot { border-bottom: 2px dotted var(--accent); }
+.pdf-mark-zotrect { background: color-mix(in srgb, var(--mark, #ffd400) 35%, transparent); }
+.pdf-marks > .pdf-flash { background: color-mix(in srgb, var(--hl-ring) 45%, transparent); box-shadow: 0 0 0 2px var(--hl-ring); mix-blend-mode: normal; opacity: .9; animation: pdf-flash 1.6s ease-out forwards; }
+@keyframes pdf-flash { 0%, 60% { opacity: .9; } 100% { opacity: 0; } }
+.pdf-msg { padding: 2rem 1.5rem; color: var(--muted); }
+.pdf-msg p { margin: 0 0 .8rem; }
+
+/* PDF.js text layer — rules copied (flattened) from vendor/pdfjs/pdf_viewer.css 6.5.438 */
+.textLayer {
+  color-scheme: only light; position: absolute; text-align: initial; inset: 0; overflow: clip; opacity: 1;
+  line-height: 1; letter-spacing: normal; word-spacing: normal; -webkit-text-size-adjust: none; text-size-adjust: none;
+  forced-color-adjust: none; transform-origin: 0 0; caret-color: CanvasText; z-index: 0;
+  --min-font-size: 1;
+  --text-scale-factor: calc(var(--total-scale-factor) * var(--min-font-size));
+  --min-font-size-inv: calc(1 / var(--min-font-size));
+}
+.textLayer :is(span, br) { color: transparent; position: absolute; white-space: pre; cursor: text; transform-origin: 0% 0%; -webkit-user-select: text; user-select: text; }
+.textLayer > :not(.markedContent),
+.textLayer .markedContent span:not(.markedContent) {
+  z-index: 1; --font-height: 0; font-size: calc(var(--text-scale-factor) * var(--font-height));
+  --scale-x: 1; --rotate: 0deg;
+  transform: rotate(var(--rotate)) scaleX(var(--scale-x)) scale(var(--min-font-size-inv));
+}
+.textLayer .markedContent { display: contents; }
+.textLayer span[role="img"] { -webkit-user-select: none; user-select: none; cursor: default; }
+.textLayer ::selection { background: rgba(0 0 255 / 0.25); background: color-mix(in srgb, AccentColor, transparent 50%); color: transparent; }
+.textLayer br::selection { background: transparent; }
+.textLayer .endOfContent { display: block; position: absolute; inset: 100% 0 0; z-index: 0; cursor: default; -webkit-user-select: none; user-select: none; }
+.textLayer.selecting .endOfContent { top: 0; }
+.textLayer[data-main-rotation="90"] { transform: rotate(90deg) translateY(-100%); }
+.textLayer[data-main-rotation="180"] { transform: rotate(180deg) translate(-100%, -100%); }
+.textLayer[data-main-rotation="270"] { transform: rotate(270deg) translateX(-100%); }
+
 .sent { border-radius: 3px; transition: background-color .25s, opacity .2s, box-shadow .25s; scroll-margin: 4rem; }
 .sent.hl { background: var(--hl); box-shadow: 0 0 0 2px var(--hl); outline: 1px solid var(--hl-ring); }
 

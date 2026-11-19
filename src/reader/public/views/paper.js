@@ -1,18 +1,26 @@
 import { el, clear, progressBar } from './dom.js';
 import { setupNotes } from './notes.js';
 import { setupCardMemos } from './card-memos.js';
+import { createPdfView } from './pdf-view.js';
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
   results: '결과', analysis: '분석', limits: '한계', implications: '시사점',
 };
 const MOBILE_QUERY = '(max-width: 959.98px)';
+const TAB_KEY = 'paper-reader:source-tab';
 
 // ---------- pure helpers (tested in Node) ----------
 
 export function visibleItems(card, mode) {
   if (mode === '3min') return [];
   return Array.isArray(card?.items) ? card.items : [];
+}
+
+// Source panel tab on open: text when there is no PDF or the reader last chose text, else PDF.
+export function initialSourceTab({ hasPdf, stored }) {
+  if (!hasPdf) return 'text';
+  return stored === 'text' ? 'text' : 'pdf';
 }
 
 export function sentenceHtmlId(sentenceId) {
@@ -223,12 +231,15 @@ function sourcePanel(source, links, onClose, paperId) {
   }
   if (refs) refs.querySelector('summary').textContent = `참고문헌 (${refsCount})`;
 
-  return el('aside', { class: 'source', id: 'source-panel', 'aria-label': '원문' },
-    el('div', { class: 'sheet-bar' },
-      el('span', { class: 'sheet-title', text: '원문' }),
-      el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', onclick: onClose }),
-    ),
-    el('header', { class: 'source-head' },
+  const tab = (name, label) => el('button', {
+    type: 'button', role: 'tab', class: 'src-tab', id: `src-tab-${name}`, 'aria-controls': `src-pane-${name}`,
+    'aria-selected': 'false', tabindex: -1, dataset: { tab: name }, text: label,
+  });
+  const pdfTab = tab('pdf', 'PDF');
+  const textTab = tab('text', '글로 읽기');
+  const pdfPane = el('div', { class: 'src-pane src-pane-pdf', id: 'src-pane-pdf', role: 'tabpanel', 'aria-labelledby': 'src-tab-pdf', hidden: true });
+  const textPane = el('div', { class: 'src-pane src-pane-text', id: 'src-pane-text', role: 'tabpanel', 'aria-labelledby': 'src-tab-text', hidden: true });
+  textPane.append(el('header', { class: 'source-head' },
       el('h2', { class: 'source-title', text: meta.title || source.id }),
       el('p', { class: 'muted', text: [
         authors.length > 3 ? `${authors.slice(0, 3).join(', ')} 외` : authors.join(', '),
@@ -238,9 +249,27 @@ function sourcePanel(source, links, onClose, paperId) {
         meta.doi ? el('a', { href: `https://doi.org/${meta.doi}`, target: '_blank', rel: 'noopener noreferrer', text: `DOI ${meta.doi}` }) : null,
         links.zoteroItem ? el('a', { href: links.zoteroItem, text: 'Zotero에서 보기' }) : null,
       ),
+    ), body);
+
+  const panel = el('aside', { class: 'source', id: 'source-panel', 'aria-label': '원문' },
+    el('div', { class: 'src-top' },
+      el('div', { class: 'sheet-bar' },
+        el('span', { class: 'sheet-title', text: '원문' }),
+        el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', onclick: onClose }),
+      ),
+      el('div', { class: 'src-tabs', role: 'tablist', 'aria-label': '원문 보기 방식' }, pdfTab, textTab),
     ),
-    body,
+    pdfPane,
+    textPane,
   );
+  return { panel, pdfTab, textTab, pdfPane, textPane };
+}
+
+function readStoredTab() {
+  try { return localStorage.getItem(TAB_KEY); } catch { return null; }
+}
+function storeTab(tab) {
+  try { localStorage.setItem(TAB_KEY, tab); } catch { /* private mode / blocked storage: keep the default */ }
 }
 
 // data: { id, source, digest, problems, progress, links }
@@ -257,13 +286,15 @@ export function render(container, data, actions) {
     focus: data.progress?.focus === true,
     current: null,
     highlighted: [],
+    tab: null,
   };
   const mobile = window.matchMedia(MOBILE_QUERY);
   document.body.classList.add('paper-mode');
 
   const root = el('div', { class: 'paper' });
   const flow = el('section', { class: 'flow', 'aria-label': '요약 흐름' });
-  const source_ = sourcePanel(source, links, () => setSheet(false), data.id);
+  const src = sourcePanel(source, links, () => setSheet(false), data.id);
+  const source_ = src.panel;
   const progressSlot = el('div', { class: 'top-progress' });
 
   const save = () => {
@@ -281,9 +312,73 @@ export function render(container, data, actions) {
   function markCurrentEvidence() {
     for (const n of source_.querySelectorAll('.sent.ev-on')) n.classList.remove('ev-on');
     const card = cards.find((c) => c.id === state.current);
-    if (!card) return;
-    for (const sid of cardEvidence(card, state.mode)) sentenceEl(sid)?.classList.add('ev-on');
+    const ids = card ? cardEvidence(card, state.mode) : [];
+    for (const sid of ids) sentenceEl(sid)?.classList.add('ev-on');
+    pdf.view?.setEvidence(ids);
   }
+
+  // ----- source tabs: [PDF] [글로 읽기] -----
+  const hasPdf = links.pdf === true && data.example !== true;
+  const pdf = { view: null, failed: false };
+  const textScroll = { top: 0 };
+  const pdfActive = () => state.tab === 'pdf' && pdf.view && !pdf.failed;
+
+  function pdfMessage(text, withButton) {
+    src.pdfPane.replaceChildren(el('div', { class: 'pdf-msg' },
+      el('p', { text }),
+      withButton ? el('button', { type: 'button', class: 'btn btn-quiet', text: '글로 읽기로 보기', onclick: () => setTab('text', { user: true, focus: true }) }) : null,
+    ));
+  }
+
+  function openPdf() {
+    if (pdf.view || pdf.failed) return;
+    if (!hasPdf) { pdfMessage('이 논문은 PDF가 없어 글로만 볼 수 있습니다.', true); return; }
+    const box = el('div', { class: 'pdf-view' });
+    src.pdfPane.replaceChildren(box);
+    pdf.view = createPdfView({
+      paperId: data.id, source, container: box,
+      onError: (err) => {
+        pdf.failed = true;
+        pdf.view?.dispose();
+        pdf.view = null;
+        pdfMessage(`PDF를 열 수 없습니다: ${err.message}`, true);
+        if (state.tab === 'pdf') setTab('text');
+      },
+    });
+    markCurrentEvidence();
+  }
+
+  function setTab(tab, { user = false, focus = false } = {}) {
+    if (state.tab === 'text' && tab !== 'text') textScroll.top = source_.scrollTop;
+    const prev = state.tab;
+    state.tab = tab;
+    for (const [name, t, pane] of [['pdf', src.pdfTab, src.pdfPane], ['text', src.textTab, src.textPane]]) {
+      const on = name === tab;
+      t.setAttribute('aria-selected', String(on));
+      t.tabIndex = on ? 0 : -1;
+      pane.hidden = !on;
+    }
+    source_.classList.toggle('tab-pdf', tab === 'pdf');
+    if (tab === 'pdf') openPdf();
+    else if (prev !== 'text') source_.scrollTop = textScroll.top;
+    if (user) storeTab(tab);
+    if (focus) (tab === 'pdf' ? src.pdfTab : src.textTab).focus();
+  }
+
+  src.pdfTab.addEventListener('click', () => setTab('pdf', { user: true }));
+  src.textTab.addEventListener('click', () => setTab('text', { user: true }));
+  src.pdfTab.parentElement.addEventListener('keydown', (e) => {
+    const order = ['pdf', 'text'];
+    const at = order.indexOf(state.tab);
+    let next = null;
+    if (e.key === 'ArrowRight') next = order[(at + 1) % order.length];
+    else if (e.key === 'ArrowLeft') next = order[(at + order.length - 1) % order.length];
+    else if (e.key === 'Home') next = order[0];
+    else if (e.key === 'End') next = order[order.length - 1];
+    if (!next) return;
+    e.preventDefault();
+    setTab(next, { user: true, focus: true });
+  });
 
   function setCurrent(cardId) {
     if (cardId === state.current) return;
@@ -301,6 +396,12 @@ export function render(container, data, actions) {
     if (cardId) setCurrent(cardId);
     for (const n of state.highlighted) n.classList.remove('hl');
     state.highlighted = ids.map(sentenceEl).filter(Boolean);
+    if (pdfActive()) {
+      for (const n of state.highlighted) n.classList.add('hl');
+      if (mobile.matches) setSheet(true);
+      if (!pdf.view.scrollToSentences(ids)) actions.toast('PDF에서 근거 문장을 찾지 못했습니다.');
+      return;
+    }
     if (!state.highlighted.length) {
       actions.toast('원문에서 근거 문장을 찾지 못했습니다.');
       return;
@@ -324,6 +425,12 @@ export function render(container, data, actions) {
   const hasImage = (f) => Boolean(findFigure(source.figures, f)?.image) && figLayout.size > 0;
   function showFigure(f) {
     const fig = findFigure(source.figures, f);
+    if (pdfActive()) {
+      if (mobile.matches) setSheet(true);
+      const cap = fig?.captionSentenceId;
+      if (!(cap && pdf.view.scrollToSentences([cap]))) pdf.view.scrollToPage(fig?.page ?? f.page);
+      return;
+    }
     const idx = fig ? (source.figures ?? []).indexOf(fig) : -1;
     const node = idx >= 0 ? document.getElementById(figureDomIds(source.figures)[idx]) : null;
     if (!node) { actions.toast('원문에서 그림을 찾지 못했습니다.'); return; }
@@ -477,6 +584,8 @@ export function render(container, data, actions) {
     el('ul', {}, problems.map((p) => el('li', { text: p }))),
   ) : null;
 
+  setTab(initialSourceTab({ hasPdf, stored: readStoredTab() }));
+
   root.classList.toggle('focus', state.focus);
   root.append(...[topbar, banner, el('div', { class: 'columns' }, flow, source_)].filter(Boolean));
   container.append(root);
@@ -487,6 +596,7 @@ export function render(container, data, actions) {
   document.addEventListener('keydown', onKey);
   return () => {
     observer?.disconnect();
+    pdf.view?.dispose();
     memos?.dispose();
     notesCtl?.dispose();
     document.removeEventListener('keydown', onKey);

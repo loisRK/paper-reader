@@ -52,9 +52,10 @@ export function clientRectsToPdf(rects, pageBox, viewport) {
   return out;
 }
 
-// PDF 사각형 -> 쪽 요소 안 CSS 픽셀 위치.
+// PDF 사각형 -> 쪽 요소 안 CSS 픽셀 위치. (PDF.js 6.5 viewport에는 convertToViewportRectangle이 없어 두 꼭짓점을 바꾼다.)
 export function pdfRectToCss(rect, viewport) {
-  const [a, b, c, d] = viewport.convertToViewportRectangle(rect);
+  const [a, b] = viewport.convertToViewportPoint(rect[0], rect[1]);
+  const [c, d] = viewport.convertToViewportPoint(rect[2], rect[3]);
   return { left: Math.min(a, c), top: Math.min(b, d), width: Math.abs(c - a), height: Math.abs(d - b) };
 }
 
