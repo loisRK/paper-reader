@@ -80,6 +80,15 @@ export function statusText(status, pending) {
 // The popover's textarea holds an edit that is not saved yet.
 export const needsCommentSave = (original, current) => typeof current === 'string' && current !== (original ?? '');
 
+// What a mousedown does to an open popover.
+// 'keep': inside the popover (or nothing open). 'reopen': another marked sentence (its click opens it).
+// 'close': anywhere else — including unmarked text and the sentence whose popover is already open (toggle).
+export function popoverDownAction({ open, inPopover, sid, marked, openSid }) {
+  if (!open || inPopover) return 'keep';
+  if (sid && marked && sid !== openSid) return 'reopen';
+  return 'close';
+}
+
 // One polling chain: kick() runs now and reschedules; a kick during a run (e.g. the tab became
 // visible again) supersedes the older chain instead of starting a second one.
 export function createPoller({ run, ms, setTimeout: st = globalThis.setTimeout, clearTimeout: ct = globalThis.clearTimeout }) {
@@ -301,7 +310,8 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
       } catch (e) { fail(e); }
     };
     // Re-sending the same values clears the conflict and queues an upsert (recreates if unlinked).
-    const ack = async () => { const sid = s.popover; if (await put({ color: h.color, comment: h.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); };
+    const cur = () => s.notes.highlights.find((x) => x.id === h.id) ?? h;
+    const ack = async () => { const sid = s.popover; const c = cur(); if (await put({ color: c.color, comment: c.comment ?? '' })) openPopover(sid, sentEl(sid) ?? panel, false); };
     const cv = conflictView(h.conflict);
     const conflictButtons = {
       dismiss: () => el('button', { type: 'button', class: 'btn btn-quiet', text: '닫기', 'aria-label': '충돌 안내 닫기', onclick: ack }),
@@ -313,7 +323,7 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
         el('span', { text: cv.text }),
         el('div', { class: 'pop-actions' }, cv.actions.map((a) => conflictButtons[a]()))) : null,
       area,
-      swatches(h.color, async (color) => { if (await put({ color })) h.color = color; }),
+      swatches(h.color, async (color) => { await put({ color }); }),
       el('div', { class: 'pop-actions' },
         el('button', { type: 'button', class: 'btn', text: '저장', 'aria-label': '메모 저장',
           onclick: async () => { const value = area.value; if (await put({ comment: value })) { edit.original = value; closePopover(); } } }),
@@ -374,9 +384,13 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
   let raf = 0;
   const schedule = () => { cancelAnimationFrame(raf); raf = requestAnimationFrame(renderToolbar); };
   const onSelChange = schedule;
+  // A mousedown that closed this sentence's popover must not reopen it on the following click.
+  let toggledClosed = null;
   const onPanelClick = (e) => {
     const n = sentOf(e.target);
-    if (!n || !document.getSelection()?.isCollapsed) return;
+    const skip = toggledClosed;
+    toggledClosed = null;
+    if (!n || !document.getSelection()?.isCollapsed || n.dataset.sid === skip) return;
     if (sentenceMarks(s.notes).has(n.dataset.sid)) openPopover(n.dataset.sid, n);
   };
   const onPanelKey = (e) => {
@@ -389,7 +403,15 @@ export function setupNotes({ id, source, panel, actions, onNotes, example = fals
     if (e.key === 'h') { e.preventDefault(); create(false); } else if (e.key === 'm') { e.preventDefault(); create(true); }
   };
   const onDocDown = (e) => {
-    if (s.pop && !s.pop.contains(e.target) && !sentOf(e.target)) closePopover();
+    const n = sentOf(e.target);
+    const sid = n?.dataset.sid ?? null;
+    const action = popoverDownAction({
+      open: Boolean(s.pop), inPopover: Boolean(s.pop?.contains(e.target)),
+      sid, marked: Boolean(sid && sentenceMarks(s.notes).has(sid)), openSid: s.popover,
+    });
+    if (action !== 'close') return;
+    if (sid && sid === s.popover) toggledClosed = sid;
+    closePopover();
   };
   document.addEventListener('selectionchange', onSelChange);
   panel.addEventListener('mouseup', schedule);

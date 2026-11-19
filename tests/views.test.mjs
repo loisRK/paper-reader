@@ -83,7 +83,7 @@ test('cardEvidence: 10min은 표 근거도 포함, 3min은 비어 있음', () =>
 });
 
 // ---------- notes (Task 6) ----------
-import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText, needsCommentSave, createPoller } from '../src/reader/public/views/notes.js';
+import { selectionSentenceIds, sentenceMarks, statusText, NOTE_COLORS, emptyNotes, singleFlight, conflictView, failedText, needsCommentSave, createPoller, popoverDownAction } from '../src/reader/public/views/notes.js';
 import { ZOTERO_COLORS } from '../src/zotero/annotations.mjs';
 
 test('selectionSentenceIds: forward and backward selection give same ordered ids', () => {
@@ -279,4 +279,14 @@ test('retryable failure: poll retries', () => {
 test('toast only on first failure', () => {
   assert.equal(shouldToast({ wasFailed: false }), true);
   assert.equal(shouldToast({ wasFailed: true }), false);
+});
+
+test('popoverDownAction: outside text closes, same sentence toggles closed, other marked sentence reopens', () => {
+  const base = { open: true, inPopover: false, openSid: 'p1-s1' };
+  assert.equal(popoverDownAction({ ...base, inPopover: true, sid: null, marked: false }), 'keep');
+  assert.equal(popoverDownAction({ ...base, open: false, sid: 'p1-s2', marked: true }), 'keep');
+  assert.equal(popoverDownAction({ ...base, sid: 'p1-s9', marked: false }), 'close');
+  assert.equal(popoverDownAction({ ...base, sid: null, marked: false }), 'close');
+  assert.equal(popoverDownAction({ ...base, sid: 'p1-s1', marked: true }), 'close');
+  assert.equal(popoverDownAction({ ...base, sid: 'p1-s2', marked: true }), 'reopen');
 });
