@@ -16,17 +16,17 @@ function attachmentFileName(data) {
 
 // file name (NFC) -> [{ key, parent }] over all Zotero PDF attachments.
 // Page 1 is always requested (it carries Last-Modified-Version); later pages only when the version changed.
-async function attachmentIndex(cfg, fetchImpl, cache) {
+async function attachmentIndex(cfg, get, cache) {
   const slot = cache ?? sharedCache;
-  const get = (k) => (slot instanceof Map ? slot.get(k) : slot[k]);
-  const set = (k, v) => (slot instanceof Map ? slot.set(k, v) : (slot[k] = v));
+  const cacheGet = (k) => (slot instanceof Map ? slot.get(k) : slot[k]);
+  const cacheSet = (k, v) => (slot instanceof Map ? slot.set(k, v) : (slot[k] = v));
   const cacheKey = String(cfg.zotero.baseUrl);
   const q = (start) => `items?itemType=attachment&format=json&limit=${PAGE}&start=${start}`;
 
-  const first = await zget(cfg, fetchImpl, q(0));
+  const first = await get(q(0));
   if (!first.ok) throw new Error(`HTTP ${first.status}`);
   const version = first.headers?.get?.('Last-Modified-Version') ?? null;
-  const cached = get(cacheKey);
+  const cached = cacheGet(cacheKey);
   if (version !== null && cached?.version === version) return cached.index;
 
   const rows = [];
@@ -35,7 +35,7 @@ async function attachmentIndex(cfg, fetchImpl, cache) {
     if (!Array.isArray(page)) break;
     rows.push(...page);
     if (page.length < PAGE) break;
-    const res = await zget(cfg, fetchImpl, q(start + PAGE));
+    const res = await get(q(start + PAGE));
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     page = await res.json();
   }
@@ -48,7 +48,7 @@ async function attachmentIndex(cfg, fetchImpl, cache) {
     if (!index.has(name)) index.set(name, []);
     index.get(name).push({ key: a.key, parent: d.parentItem });
   }
-  set(cacheKey, { version, index });
+  cacheSet(cacheKey, { version, index });
   return index;
 }
 
@@ -56,14 +56,14 @@ async function realOf(p) {
   try { return nfc(await fs.realpath(p)); } catch { return nfc(p); }
 }
 
-async function attachmentPath(cfg, fetchImpl, key) {
-  const res = await zget(cfg, fetchImpl, `items/${key}/file/view/url`);
+async function attachmentPath(get, key) {
+  const res = await get(`items/${key}/file/view/url`);
   if (!res.ok) return null;
   try { return fileUrlToLocalPath((await res.text()).trim()); } catch { return null; }
 }
 
-async function parentMeta(cfg, fetchImpl, key) {
-  const res = await zget(cfg, fetchImpl, `items/${key}?format=json`);
+async function parentMeta(get, key) {
+  const res = await get(`items/${key}?format=json`);
   if (!res.ok) return null;
   const item = await res.json();
   return item?.data ? toMeta(item.data) : null;
@@ -71,29 +71,31 @@ async function parentMeta(cfg, fetchImpl, key) {
 
 // Link rule (see plan Global Constraints). Returns null when not linked or Zotero is unreachable.
 export async function findZoteroAttachment({ file, md5, doi } = {}, cfg, deps = {}) {
-  const { fetchImpl = globalThis.fetch, md5File = defaultMd5File, cache } = deps;
+  const { fetchImpl = globalThis.fetch, md5File = defaultMd5File, cache, timeoutMs } = deps;
+  // Every call is bounded (zget default 10 s); a timeout throws like "Zotero off" and ends in null.
+  const get = (q) => zget(cfg, fetchImpl, q, timeoutMs ? { timeoutMs } : {});
   try {
-    const index = await attachmentIndex(cfg, fetchImpl, cache);
+    const index = await attachmentIndex(cfg, get, cache);
     const mineReal = await realOf(file);
     const candidates = index.get(nfc(path.basename(file))) ?? [];
     let hit = null;
     for (const c of candidates) {
-      const p = await attachmentPath(cfg, fetchImpl, c.key);
+      const p = await attachmentPath(get, c.key);
       if (p && (await realOf(p)) === mineReal) { hit = c; break; }
     }
     if (!hit && candidates.length === 0 && doi) {
       const wantDoi = String(doi).toLowerCase();
-      const res = await zget(cfg, fetchImpl, `items?q=${encodeURIComponent(doi)}&qmode=everything&format=json`);
+      const res = await get(`items?q=${encodeURIComponent(doi)}&qmode=everything&format=json`);
       if (res.ok) {
         const list = await res.json();
         const item = (Array.isArray(list) ? list : []).find((it) => String(it?.data?.DOI ?? '').toLowerCase() === wantDoi);
         if (item) {
-          const kids = await zget(cfg, fetchImpl, `items/${item.key}/children?format=json`);
+          const kids = await get(`items/${item.key}/children?format=json`);
           if (kids.ok) {
             const mine = String(md5 ?? (await md5File(file))).toLowerCase();
             for (const k of ((await kids.json()) ?? [])) {
               if (k?.data?.contentType !== 'application/pdf') continue;
-              const p = await attachmentPath(cfg, fetchImpl, k.key);
+              const p = await attachmentPath(get, k.key);
               if (!p) continue;
               let theirs;
               try { theirs = String(await md5File(p)).toLowerCase(); } catch { continue; }
@@ -104,7 +106,7 @@ export async function findZoteroAttachment({ file, md5, doi } = {}, cfg, deps = 
       }
     }
     if (!hit) return null;
-    const meta = await parentMeta(cfg, fetchImpl, hit.parent);
+    const meta = await parentMeta(get, hit.parent);
     return { itemKey: hit.parent, attachmentKey: hit.key, meta };
   } catch {
     return null;

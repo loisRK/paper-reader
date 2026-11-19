@@ -218,3 +218,29 @@ test('linkToZotero returns false when nothing matches or Zotero is off, source u
   assert.equal(await linkToZotero(out, 'nope', cfg, { fetchImpl: off, cache: {} }), false);
   assert.equal(await fs.readFile(path.join(out, 'pid', 'source.json'), 'utf8'), raw);
 });
+
+test('hung Zotero (fetch never resolves) -> null within the injected timeout', async (t) => {
+  const d = await tmpdir(t);
+  const file = path.join(d, 'x.pdf');
+  await fs.writeFile(file, 'x');
+  let n = 0;
+  const fetchImpl = () => { n += 1; return new Promise(() => {}); };
+  const started = Date.now();
+  const r = await Promise.race([
+    findZoteroAttachment({ file, md5: 'm', doi: '10.1/x' }, cfg, { fetchImpl, cache: new Map(), timeoutMs: 50 }),
+    new Promise((res) => setTimeout(() => res('HUNG'), 2000)),
+  ]);
+  assert.equal(r, null);
+  assert.ok(Date.now() - started < 1000);
+  assert.equal(n, 1);
+});
+
+test('every link request carries an abort signal', async (t) => {
+  const d = await tmpdir(t);
+  const file = path.join(d, 'x.pdf');
+  await fs.writeFile(file, 'x');
+  const seen = [];
+  const fetchImpl = async (url, init) => { seen.push(init?.signal instanceof AbortSignal); throw new Error('off'); };
+  assert.equal(await findZoteroAttachment({ file }, cfg, { fetchImpl, cache: new Map() }), null);
+  assert.deepEqual(seen, [true]);
+});

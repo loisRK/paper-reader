@@ -704,3 +704,36 @@ test('paper list: link failures are swallowed and retried after the cooldown', a
   await new Promise((r) => setTimeout(r, 20));
   assert.deepEqual(calls, ['unl', 'unl']);
 });
+
+const within = (p, ms) => Promise.race([p, new Promise((r) => setTimeout(() => r('HUNG'), ms))]);
+
+test('extract route: a hung Zotero in the link step times out quietly; the next extraction is not 409', async (t) => {
+  let fetches = 0;
+  const fetchImpl = () => { fetches += 1; return new Promise(() => {}); };
+  const extractFile = async ({ cfg, file, id }) => {
+    await fs.mkdir(path.join(cfg.outputDir, id), { recursive: true });
+    await fs.writeFile(path.join(cfg.outputDir, id, 'source.json'), JSON.stringify({ id, meta: { title: 'T', doi: '10.1/x' }, pdf: { path: file, md5: 'm' }, pages: [], sentences: {} }));
+    return { id, source: {} };
+  };
+  const { post, listed } = await extractServer(t, { extractFile, fetchImpl, zoteroTimeoutMs: 50, linkCooldownMs: 3_600_000 });
+  const id = (await listed()).id;
+  const first = await within(post({ id }), 3000);
+  assert.notEqual(first, 'HUNG');
+  assert.equal(first.status, 200);
+  assert.ok(fetches >= 1);
+  const second = await within(post({ id }), 3000);
+  assert.notEqual(second, 'HUNG');
+  assert.equal(second.status, 200);
+});
+
+test('paper list: a hung Zotero does not wedge background linking', async (t) => {
+  let fetches = 0;
+  const fetchImpl = () => { fetches += 1; return new Promise(() => {}); };
+  const base = await linkServer(t, { fetchImpl, zoteroTimeoutMs: 50, linkCooldownMs: 0 });
+  assert.equal((await fetch(`${base}/api/papers`)).status, 200);
+  await new Promise((r) => setTimeout(r, 300));
+  assert.equal(fetches, 1);
+  assert.equal((await fetch(`${base}/api/papers`)).status, 200);
+  await new Promise((r) => setTimeout(r, 50));
+  assert.equal(fetches, 2);
+});

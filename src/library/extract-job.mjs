@@ -1,5 +1,8 @@
 import { readSettings } from './settings.mjs';
 import { scanFolders } from './scan.mjs';
+
+// Upper bound for the post-extract Zotero link step (each Zotero call has its own 10 s timeout too).
+export const LINK_TIMEOUT_MS = 30_000;
 import { extractFile as defaultExtractFile } from '../digest/extract-cli.mjs';
 
 export class JobError extends Error {
@@ -21,6 +24,9 @@ export function createExtractJob({
   extractFile = defaultExtractFile,
   linkToZotero = async () => false,
   linkDeps = {},
+  linkTimeoutMs = LINK_TIMEOUT_MS,
+  // (folders) => { files }. The server passes its non-blocking library list (no MD5 wait).
+  listFiles = (folders) => scanFolders(folders, { dataDir, md5 }),
 }) {
   let busy = false;
   return async function runExtract(id) {
@@ -28,7 +34,7 @@ export function createExtractJob({
     busy = true;
     try {
       const { folders } = dataDir ? await readSettings(dataDir) : { folders: [] };
-      const { files } = folders.length ? await scanFolders(folders, { dataDir, md5 }) : { files: [] };
+      const { files } = folders.length ? await listFiles(folders) : { files: [] };
       const found = files.find((f) => f.id === id);
       if (!found) throw new JobError(404, NOT_FOUND_MESSAGE);
       try {
@@ -36,9 +42,16 @@ export function createExtractJob({
       } catch (err) {
         throw new JobError(500, String(err?.message ?? err).split('\n')[0] || '추출에 실패했습니다.');
       }
+      // Best effort and bounded: a hung Zotero must never keep `busy` set. Retried on a later list.
+      let timer;
       try {
-        await linkToZotero(cfg.outputDir, id, cfg, linkDeps);
-      } catch { /* linking is best effort; it is retried on a later scan */ }
+        await Promise.race([
+          linkToZotero(cfg.outputDir, id, cfg, linkDeps),
+          new Promise((resolve) => { timer = setTimeout(resolve, linkTimeoutMs); }),
+        ]);
+      } catch { /* quiet */ } finally {
+        clearTimeout(timer);
+      }
       return { id, state: 'extracted' };
     } finally {
       busy = false;

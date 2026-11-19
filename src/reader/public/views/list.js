@@ -23,6 +23,12 @@ export function folderPreview(items, expanded) {
 
 const zoteroTag = () => el('span', { class: 'tag tag-zotero', title: 'Zotero 항목과 연결됨', text: 'Zotero' });
 
+// "PDF 확인 중 (n/m)" while the server is still computing MD5s in the background; null when done.
+export function hashingText(hashing) {
+  if (!hashing || !(hashing.total > 0) || hashing.done >= hashing.total) return null;
+  return `PDF 확인 중 (${hashing.done}/${hashing.total})`;
+}
+
 function paperCard(p) {
   const s = tileState(p);
   return el('li', { class: 'paper-tile' },
@@ -54,7 +60,7 @@ function pdfCard(p, onExtract) {
   );
 }
 
-function folderSection(folders, actions) {
+function folderSection(folders, actions, hashing) {
   const paths = folders.map((f) => f.path);
   const save = async (next) => {
     try {
@@ -108,6 +114,7 @@ function folderSection(folders, actions) {
     rows.length
       ? el('ul', { class: 'folder-list' }, rows)
       : el('p', { class: 'empty', text: '논문 PDF를 모아 둔 폴더의 경로를 입력하세요. 예: /Users/me/Papers' }),
+    hashingText(hashing) ? el('p', { class: 'folder-note', role: 'status', text: hashingText(hashing) }) : null,
     form,
   );
 }
@@ -156,7 +163,7 @@ function pdfSection(pdfs, hasFolders, actions) {
   return section;
 }
 
-// data: { papers: [...], folders: [{ path, ok, message? }], searches: string[] }
+// data: { papers: [...], folders: [{ path, ok, message? }], hashing?: { done, total }, searches: string[] }
 export function render(container, data, actions) {
   clear(container);
   const all = data.papers ?? [];
@@ -166,7 +173,7 @@ export function render(container, data, actions) {
   const searches = data.searches ?? [];
   container.append(
     el('h1', { class: 'page-title', tabindex: -1, text: 'Paper Reader' }),
-    folderSection(folders, actions),
+    folderSection(folders, actions, data.hashing),
     el('section', { class: 'list-section', 'aria-labelledby': 'h-papers' },
       el('h2', { id: 'h-papers', text: '요약 있음 · 대기' }),
       papers.length

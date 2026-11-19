@@ -3,7 +3,7 @@ import assert from 'node:assert/strict';
 import { metricBadges, citationTrend } from '../src/reader/public/views/search.js';
 import { visibleItems, sentenceHtmlId, glossarySegments, cardEvidence, figureLayout, figureSlug, findFigure, figureDomIds, initialSourceTab } from '../src/reader/public/views/paper.js';
 import { nextZoom, pagesToDraw, pdfErrorMessage } from '../src/reader/public/views/pdf-view.js';
-import { progressPercent, tileState, folderPreview } from '../src/reader/public/views/list.js';
+import { progressPercent, tileState, folderPreview, hashingText } from '../src/reader/public/views/list.js';
 
 test('metricBadges: null → 미확인, true → 확인 배지', () => {
   const all = metricBadges({ scopus: null, sjrQuartile: null, sjrYear: null, wos: null, scie: null, ssci: null });
@@ -523,4 +523,10 @@ test('toolbarAction: 끄는 중 selectionchange는 숨김, 놓으면·키보드 
   assert.equal(toolbarAction({ dragging: false, trigger: 'selectionchange' }), 'render');
   assert.equal(toolbarAction({ dragging: false, trigger: 'pointerup' }), 'render');
   assert.equal(toolbarAction({ dragging: false, trigger: 'mouseup' }), 'render');
+});
+
+test('hashingText: shown only while PDFs are being checked', () => {
+  assert.equal(hashingText({ done: 2, total: 5 }), 'PDF 확인 중 (2/5)');
+  assert.equal(hashingText({ done: 5, total: 5 }), null);
+  assert.equal(hashingText(undefined), null);
 });

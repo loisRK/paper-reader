@@ -73,11 +73,25 @@ export function fileUrlToLocalPath(url) {
   return fileURLToPath(url);
 }
 
-export async function zget(cfg, fetchImpl, pathAndQuery) {
+// Same convention as write.mjs TIMEOUT_MS: every read is bounded so a hung Zotero cannot block callers.
+export const READ_TIMEOUT_MS = 10000;
+
+// Network failure, abort or timeout -> NOT_RUNNING_MESSAGE. The race also covers a fetch that ignores the signal.
+export async function zget(cfg, fetchImpl, pathAndQuery, { timeoutMs = READ_TIMEOUT_MS } = {}) {
+  const signal = AbortSignal.timeout(timeoutMs);
+  let onAbort;
   try {
-    return await fetchImpl(`${baseUrl(cfg)}/api/users/0/${pathAndQuery}`);
+    return await Promise.race([
+      fetchImpl(`${baseUrl(cfg)}/api/users/0/${pathAndQuery}`, { signal }),
+      new Promise((_, reject) => {
+        onAbort = () => reject(signal.reason);
+        signal.addEventListener('abort', onAbort, { once: true });
+      }),
+    ]);
   } catch {
     throw new Error(NOT_RUNNING_MESSAGE);
+  } finally {
+    signal.removeEventListener('abort', onAbort);
   }
 }
 

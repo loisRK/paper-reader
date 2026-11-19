@@ -8,7 +8,7 @@ import { linkToZotero as defaultLinkToZotero } from '../zotero/link.mjs';
 import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
 import { readSettings, writeSettings } from '../library/settings.mjs';
-import { scanFolders } from '../library/scan.mjs';
+import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
@@ -132,7 +132,15 @@ export function createServer(cfg, deps = {}) {
   const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
   const out = cfg.outputDir;
   const linkToZotero = deps.linkToZotero ?? defaultLinkToZotero;
-  const runExtract = createExtractJob({ cfg, dataDir, md5: md5Impl, extractFile: deps.extractFile, linkToZotero, linkDeps: { fetchImpl } });
+  // One folder library per server: the MD5 worker and its cache are shared by the list and the extract job.
+  const library = createLibrary({ dataDir, md5: md5Impl });
+  // Every Zotero call on the link path is bounded (default 10 s); a timeout counts as "Zotero off".
+  const linkDeps = { fetchImpl, ...(deps.zoteroTimeoutMs ? { timeoutMs: deps.zoteroTimeoutMs } : {}) };
+  const runExtract = createExtractJob({
+    cfg, dataDir, extractFile: deps.extractFile, linkToZotero, linkDeps,
+    listFiles: (folders) => library.list(folders),
+    ...(deps.linkTimeoutMs ? { linkTimeoutMs: deps.linkTimeoutMs } : {}),
+  });
   // Retry linking unlinked folder papers in the background: one at a time, same paper not again within the cooldown.
   const linkCooldownMs = deps.linkCooldownMs ?? 30_000;
   const linkTried = new Map();
@@ -149,7 +157,7 @@ export function createServer(cfg, deps = {}) {
     (async () => {
       for (const id of todo) {
         linkTried.set(id, Date.now());
-        try { await linkToZotero(out, id, cfg, { fetchImpl }); } catch { /* quiet; retried on a later list */ }
+        try { await linkToZotero(out, id, cfg, linkDeps); } catch { /* quiet; retried on a later list */ }
       }
     })().finally(() => { linking = false; });
   }
@@ -223,10 +231,11 @@ export function createServer(cfg, deps = {}) {
         };
       });
       const folders = [];
+      let hashing;
       if (dataDir) {
         const { folders: paths } = await readSettings(dataDir);
         if (paths.length) {
-          const scan = await scanFolders(paths, { dataDir, md5: md5Impl });
+          const scan = await library.list(paths);
           const known = new Set(list.map((p) => p.id));
           const md5s = new Set();
           const reals = new Set();
@@ -238,10 +247,11 @@ export function createServer(cfg, deps = {}) {
             }
           }
           for (const f of scan.files) {
-            if (known.has(f.id) || reals.has(f.path) || md5s.has(f.md5)) continue;
+            if (known.has(f.id) || reals.has(f.path) || (f.md5 && md5s.has(f.md5))) continue;
             known.add(f.id);
             list.push({ id: f.id, title: path.basename(f.rel), state: 'pdf', origin: 'folder', linked: false, file: f.rel });
           }
+          hashing = scan.hashing;
           for (const p of paths) {
             const problem = scan.problems.find((x) => x.folder === p && x.message.startsWith('폴더를 찾을 수 없습니다'));
             const warn = scan.problems.find((x) => x.folder === p && !x.message.startsWith('폴더를 찾을 수 없습니다'));
@@ -249,7 +259,7 @@ export function createServer(cfg, deps = {}) {
           }
         }
       }
-      return sendJson(res, 200, { papers: list, folders });
+      return sendJson(res, 200, { papers: list, folders, ...(hashing ? { hashing } : {}) });
     }
 
     if (parts[1] === 'papers' && parts.length === 3 && method === 'GET') {

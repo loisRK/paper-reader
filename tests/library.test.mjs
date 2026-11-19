@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import fs from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
+import crypto from 'node:crypto';
 import { readSettings, writeSettings } from '../src/library/settings.mjs';
 import { scanFolders, folderPaperId } from '../src/library/scan.mjs';
 import { isSafeName } from '../src/reader/store.mjs';
@@ -132,4 +133,128 @@ test('API: merged list dedupes extracted bundles by md5 / path, flags missing fo
   } finally {
     await fs.rm(path.join(dataDir, 'settings.json'), { force: true });
   }
+});
+
+// ---- stage 2 final fixes: non-blocking hashing, lenient folder edits ----
+
+async function freshServer(t, deps) {
+  const d = await fs.mkdtemp(path.join(tmp, 'fresh-'));
+  const data = path.join(d, 'data');
+  const out = path.join(d, 'out');
+  await fs.mkdir(out, { recursive: true });
+  await writeSettings(data, { folders: [root] });
+  const server = createServer({ outputDir: out, dataDir: data, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: path.join(d, 'none'), ...deps });
+  await new Promise((r) => server.listen(0, '127.0.0.1', r));
+  t.after(() => server.close());
+  return { base: `http://127.0.0.1:${server.address().port}`, data, out };
+}
+
+function slowHasher() {
+  const calls = new Map();
+  const waiting = [];
+  const md5File = (file) => {
+    calls.set(file, (calls.get(file) ?? 0) + 1);
+    return new Promise((r) => waiting.push(() => r(crypto.createHash('md5').update(file).digest('hex'))));
+  };
+  const releaseAll = async () => {
+    for (let i = 0; i < 50; i++) {
+      while (waiting.length) waiting.shift()();
+      await new Promise((r) => setTimeout(r, 10));
+      if (!waiting.length) return;
+    }
+  };
+  return { md5File, calls, waiting, releaseAll };
+}
+
+test('API: GET /api/papers answers before hashing finishes; concurrent GETs hash each file once', async (t) => {
+  const h = slowHasher();
+  const { base, data } = await freshServer(t, { md5File: h.md5File });
+  const get = () => Promise.race([
+    fetch(`${base}/api/papers`).then((r) => r.json()),
+    new Promise((r) => setTimeout(() => r('HUNG'), 1500)),
+  ]);
+  const [a, b] = await Promise.all([get(), get()]);
+  assert.notEqual(a, 'HUNG');
+  assert.notEqual(b, 'HUNG');
+  assert.equal(a.papers.filter((p) => p.state === 'pdf').length, 3);
+  assert.deepEqual(a.hashing, { done: 0, total: 3 });
+  assert.equal(h.waiting.length, 1); // one at a time
+  await h.releaseAll();
+  const c = await get();
+  assert.deepEqual(c.hashing, { done: 3, total: 3 });
+  assert.equal(h.calls.size, 3);
+  for (const [, n] of h.calls) assert.equal(n, 1);
+  const cache = JSON.parse(await fs.readFile(path.join(data, 'library-cache.json'), 'utf8'));
+  assert.equal(Object.keys(cache).length, 3);
+});
+
+test('API: md5 dedupe catches up once the background hash is known', async (t) => {
+  const h = slowHasher();
+  const { base, out } = await freshServer(t, { md5File: h.md5File });
+  const target = await fs.realpath(path.join(root, 'a', 'same.pdf'));
+  await fs.mkdir(path.join(out, 'done9'), { recursive: true });
+  await fs.writeFile(path.join(out, 'done9', 'source.json'), JSON.stringify({ id: 'done9', meta: { title: 'D' }, pdf: { path: '/elsewhere/old.pdf', md5: crypto.createHash('md5').update(target).digest('hex') } }));
+  const first = await (await fetch(`${base}/api/papers`)).json();
+  assert.equal(first.papers.filter((p) => p.state === 'pdf').length, 3);
+  await h.releaseAll();
+  const later = await (await fetch(`${base}/api/papers`)).json();
+  assert.deepEqual(later.papers.filter((p) => p.state === 'pdf').map((p) => p.file).sort(), ['b/same.pdf', '한글 이름 논문.PDF'].sort());
+});
+
+test('scan cache: entries of a temporarily missing folder are kept; dropped once the folder leaves settings', async () => {
+  const d = await fs.mkdtemp(path.join(tmp, 'disk-'));
+  const disk = path.join(d, 'disk');
+  const away = path.join(d, 'away');
+  const data = path.join(d, 'data');
+  await fs.mkdir(disk);
+  await fs.writeFile(path.join(disk, 'p.pdf'), pdf('disk'));
+  let n = 0;
+  const md5 = async () => { n++; return 'b'.repeat(32); };
+  await scanFolders([disk, root], { dataDir: data, md5 });
+  assert.equal(n, 4);
+  await fs.rename(disk, away); // unplugged
+  await scanFolders([disk, root], { dataDir: data, md5 });
+  await fs.rename(away, disk); // plugged back in
+  n = 0;
+  await scanFolders([disk, root], { dataDir: data, md5 });
+  assert.equal(n, 0);
+  await scanFolders([root], { dataDir: data, md5 }); // folder removed from settings
+  const diskReal = await fs.realpath(disk);
+  const cache = JSON.parse(await fs.readFile(path.join(data, 'library-cache.json'), 'utf8'));
+  assert.equal(Object.keys(cache).some((k) => k.startsWith(diskReal)), false);
+  assert.equal(Object.keys(cache).length, 3);
+});
+
+test('settings: a missing saved folder does not block adding another or removing either', async () => {
+  const d = await fs.mkdtemp(path.join(tmp, 'lenient-'));
+  const data = path.join(d, 'data');
+  const ext = path.join(d, 'ext');
+  const other = path.join(d, 'other');
+  await fs.mkdir(ext);
+  await fs.mkdir(other);
+  await writeSettings(data, { folders: [root, ext] });
+  await fs.rmdir(ext); // unplugged
+  await writeSettings(data, { folders: [root, ext, other] });
+  assert.deepEqual(await readSettings(data), { folders: [root, ext, other] });
+  await writeSettings(data, { folders: [ext, other] }); // remove root
+  await writeSettings(data, { folders: [other] }); // remove the missing one
+  assert.deepEqual(await readSettings(data), { folders: [other] });
+  // a NEW path must still exist and be absolute; the limit still applies
+  await assert.rejects(writeSettings(data, { folders: [other, ext] }), { message: `폴더를 찾을 수 없습니다: ${ext}` });
+  await assert.rejects(writeSettings(data, { folders: [other, 'rel'] }), { message: '절대 경로를 입력하세요.' });
+  await assert.rejects(writeSettings(data, { folders: Array(11).fill(other) }), { message: '폴더는 10개까지 지정할 수 있습니다.' });
+});
+
+test('API: PUT folders with an unplugged saved folder still adds a new one', async (t) => {
+  const { base, data } = await freshServer(t, {});
+  const d = path.dirname(data);
+  const ext = path.join(d, 'ext2');
+  const other = path.join(d, 'other2');
+  await fs.mkdir(ext);
+  await fs.mkdir(other);
+  await writeSettings(data, { folders: [root, ext] });
+  await fs.rmdir(ext);
+  const res = await putJson(base, { folders: [root, ext, other] });
+  assert.equal(res.status, 200);
+  assert.deepEqual(await res.json(), { folders: [root, ext, other] });
 });

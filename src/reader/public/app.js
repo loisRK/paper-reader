@@ -102,10 +102,10 @@ async function route() {
       document.title = `검색 ${name} · Paper Reader`;
       searchView.render(app, { name, search }, actions);
     } else {
-      const [{ papers, folders }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
+      const [{ papers, folders, hashing }, searches] = await Promise.all([api('/api/papers'), api('/api/searches')]);
       if (seq !== routeSeq) return;
       document.title = 'Paper Reader';
-      listView.render(app, { papers, folders, searches }, actions);
+      listView.render(app, { papers, folders, hashing, searches }, actions);
     }
     window.scrollTo(0, 0);
     app.querySelector('h1')?.focus({ preventScroll: true });
