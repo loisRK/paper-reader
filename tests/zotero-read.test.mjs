@@ -90,3 +90,19 @@ test('connection refused gives not-running message', async () => {
   await assert.rejects(resolveItem('H9RA4VSE', cfg, { fetchImpl: async () => { throw new Error('ECONNREFUSED'); } }),
     { message: /^Zotero가 실행 중이 아닙니다/ });
 });
+
+test('DOI input searches by DOI and matches data.DOI case-insensitively', async () => {
+  const calls = [];
+  const doiItem = { key: 'H9RA4VSE', data: { ...item.data, DOI: '10.1016/J.Ab.2025.1' } };
+  const fetchImpl = fake([
+    ['/items?q=', json([{ key: 'ZZZZZZZZ', data: { DOI: '10.1016/other' } }, doiItem])],
+    ['/IG8JQQUI/file/view/url', text('file:///tmp/p.pdf')],
+    ['/H9RA4VSE/children', json(children)],
+  ], calls);
+  const r = await resolveItem('10.1016/j.ab.2025.1', cfg, { fetchImpl });
+  assert.equal(r.itemKey, 'H9RA4VSE');
+  assert.equal(r.id, 'chen2025x');
+  assert.match(calls[0], /items\?q=10\.1016%2Fj\.ab\.2025\.1&qmode=everything&format=json/);
+  await assert.rejects(resolveItem('10.9/none', cfg, { fetchImpl: fake([['/items?q=', json([doiItem])]]) }),
+    { message: "Zotero에서 '10.9/none' 항목을 찾지 못했습니다." });
+});

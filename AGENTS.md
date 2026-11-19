@@ -15,7 +15,7 @@
 
 ## 2. 논문 요약 (paper-digest)
 
-1. `npm run extract -- <id>`를 실행합니다. `<id>`는 Zotero citekey 또는 itemKey이며, 결과는 `<outputDir>/<id>/source.json`입니다.
+1. `npm run extract -- <id>`를 실행합니다. `<id>`는 Zotero citekey 또는 itemKey이며(DOI도 가능), 결과는 `<outputDir>/<id>/source.json`입니다. DOI로 실행했다면 출력의 `저장:` 경로에 있는 폴더 이름(citekey 또는 itemKey)을 이후 단계의 `<id>`로 씁니다.
 2. `prompts/digest.md`를 읽고 그 규칙대로 `<outputDir>/<id>/digest.json`을 작성합니다.
 3. `npm run check -- <id>`를 실행하고, 문제가 보고되면 고쳐서 통과할 때까지 반복합니다.
 4. 사용자에게 읽기 앱 주소 `http://127.0.0.1:<port>/#/paper/<id>`를 안내합니다. 서버가 떠 있지 않으면 `npm run reader`로 실행하라고 안내합니다.

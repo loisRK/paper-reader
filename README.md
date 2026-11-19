@@ -86,6 +86,16 @@ npm run check -- <citekey|itemKey>            # digest.json 검증 (근거 ID·s
 npm run reader                                # 읽기 앱: http://127.0.0.1:5173
 ```
 
+### `<citekey|itemKey>`는 어디서 찾나요?
+
+`npm run extract`와 `/paper-digest`에는 Zotero 항목을 가리키는 값 하나를 넘깁니다. 다음 중 아무거나 쓸 수 있습니다.
+
+1. **citekey**: [Better BibTeX](https://retorque.re/zotero-better-bibtex/) 플러그인을 쓰면 항목마다 citekey(예: `chen2025agent`)가 생깁니다. Zotero 7 이상은 항목 정보(Info) 창의 기본 **"Citation Key"** 필드도 인식합니다. citekey가 있으면 그것이 결과 폴더 이름(`<outputDir>/<citekey>/`)이 됩니다.
+2. **itemKey**: citekey가 없으면 Zotero의 8자리 항목 key(예: `H9RA4VSE`)를 쓰세요. 항목을 오른쪽 클릭 → **"Copy Zotero URI"**(또는 Zotero 링크 복사)를 하면 `zotero://select/library/items/<KEY>` 형태가 복사되는데, 마지막 8자리가 itemKey입니다(Zotero 버전에 따라 메뉴 이름이 조금 다를 수 있습니다).
+3. **DOI**: `10.`으로 시작하는 DOI(예: `10.1016/j.xxx.2025.1`)를 넘기면 Zotero에서 DOI 필드가 같은 항목을 찾습니다(대소문자 무시). 결과 폴더 이름은 citekey, 없으면 itemKey가 됩니다.
+
+`npm run check`에는 추출 후 만들어진 폴더 이름(citekey 또는 itemKey)을 넘깁니다.
+
 ### 예제로 먼저 둘러보기
 
 설치 직후 `npm run reader`를 실행하면 목록에 **"예제"** 배지가 붙은 공개 논문 1편이 보입니다. CC BY 4.0 라이선스 논문으로 만든 `source.json`·`digest.json`이 [`examples/`](examples/)에 들어 있습니다(출처·라이선스는 각 예제 폴더의 README 참고). 예제의 읽기 진행률은 `outputDir`에 저장되며 저장소 파일은 바뀌지 않습니다.

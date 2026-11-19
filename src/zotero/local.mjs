@@ -91,6 +91,7 @@ function toMeta(d) {
   };
 }
 
+// idOrKey: 8-char Zotero item key, citation key, or DOI (starts with "10.").
 export async function resolveItem(idOrKey, cfg, opts = {}) {
   const { fetchImpl = globalThis.fetch } = opts;
   const notFound = new Error(`Zotero에서 '${idOrKey}' 항목을 찾지 못했습니다.`);
@@ -104,7 +105,11 @@ export async function resolveItem(idOrKey, cfg, opts = {}) {
     const res = await zget(cfg, fetchImpl, `items?q=${encodeURIComponent(idOrKey)}&qmode=everything&format=json`);
     if (!res.ok) throw new Error(`Zotero 조회 실패: HTTP ${res.status}`);
     const list = await res.json();
-    item = (Array.isArray(list) ? list : []).find((it) => it?.data?.citationKey === idOrKey);
+    const isDoi = /^10\./.test(idOrKey);
+    const want = idOrKey.toLowerCase();
+    item = (Array.isArray(list) ? list : []).find((it) => (isDoi
+      ? String(it?.data?.DOI ?? '').toLowerCase() === want
+      : it?.data?.citationKey === idOrKey));
     if (!item) throw notFound;
   }
   const itemKey = item.key;
