@@ -7,6 +7,7 @@
 ## 1. 입력
 
 - `<outputDir>/<id>/source.json` (`npm run extract -- <id>`로 생성). 문장은 `sentences`의 `p{페이지}-s{번호}` ID로 식별한다.
+- 앱이 AI 도구를 직접 실행할 때는 `source.json` 대신 같은 내용의 `paper.txt`(한 줄에 `[문장ID] 문장`, `## p.<n>` 쪽 표시, `### ` 제목, `(caption) ` 캡션, `(figure text) ` 그림 안의 글, 참고문헌 제외)와 `figures.txt`(한 줄에 `라벨 | 쪽 | caption: 문장ID`)를 준다. 이 문서에서 `source.json`의 문장·`figures`라고 한 것은 그 두 파일의 것으로 읽는다.
 
 ## 2. 출력
 

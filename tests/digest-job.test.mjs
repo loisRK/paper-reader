@@ -94,7 +94,7 @@ test('first attempt passes: done, digest.json replaced, digest.prev.json keeps t
   assert.ok(done.log.some((l) => l.includes('Read source.json')));
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(c2.out, 'p1', 'digest.json'), 'utf8')), GOOD);
   assert.deepEqual(JSON.parse(await fs.readFile(path.join(c2.out, 'p1', 'digest.prev.json'), 'utf8')), OLD);
-  assert.deepEqual(c2.calls[0].files, ['TASK.md', 'digest.md', 'source.json']);
+  assert.deepEqual(c2.calls[0].files, ['TASK.md', 'digest.md', 'figures.txt', 'paper.txt']);
   assert.equal(c2.calls[0].id, 'claude');
   assert.equal(await exists(c2.workdirs[0]), false);
   assert.deepEqual((await fs.readdir(path.join(c2.out, 'p1'))).sort(), ['digest.json', 'digest.prev.json', 'source.json']);
@@ -111,7 +111,7 @@ test('a leftover researchContextFile setting is ignored silently', async (t) => 
   await settled(c.jobs, 'p1');
   const job = c.jobs.get('p1');
   assert.equal(job.state, 'done', job.message);
-  assert.deepEqual(c.calls[0].files, ['TASK.md', 'digest.md', 'source.json']);
+  assert.deepEqual(c.calls[0].files, ['TASK.md', 'digest.md', 'figures.txt', 'paper.txt']);
   assert.ok(!job.log.some((l) => l.includes('연구 맥락')));
 });
 

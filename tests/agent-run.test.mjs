@@ -26,7 +26,12 @@ const tick = () => new Promise((r) => setImmediate(r));
 
 async function scratch() {
   const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-test-'));
-  await fs.writeFile(path.join(d, 'source.json'), '{"id":"p"}');
+  await fs.writeFile(path.join(d, 'source.json'), JSON.stringify({
+    id: 'p',
+    blocks: [{ id: 'b1', type: 'paragraph', page: 1, sentenceIds: ['p1-s1'] }],
+    sentences: { 'p1-s1': { text: 'Body.', page: 1 } },
+    figures: [{ label: 'Figure 1', page: 1, captionSentenceId: 'p1-s1' }],
+  }));
   await fs.writeFile(path.join(d, 'digest.md'), 'rules');
   await fs.writeFile(path.join(d, 'ctx.md'), 'ctx');
   await fs.writeFile(path.join(d, 'prev.json'), '{"old":1}');
@@ -38,8 +43,12 @@ test('prepareWorkdir creates exactly the allowed files; cleanup removes them', a
   const w = await prepareWorkdir({ source: path.join(d, 'source.json'), digestRules: path.join(d, 'digest.md') });
   assert.ok(path.basename(w).startsWith('paper-reader-digest-'));
   assert.ok(path.relative(os.homedir(), w).startsWith('..'));
-  assert.deepEqual((await fs.readdir(w)).sort(), ['TASK.md', 'digest.md', 'source.json']);
-  assert.equal(await fs.readFile(path.join(w, 'source.json'), 'utf8'), '{"id":"p"}');
+  assert.deepEqual((await fs.readdir(w)).sort(), ['TASK.md', 'digest.md', 'figures.txt', 'paper.txt']);
+  assert.equal(await fs.readFile(path.join(w, 'paper.txt'), 'utf8'), '## p.1\n[p1-s1] Body.\n');
+  assert.equal(await fs.readFile(path.join(w, 'figures.txt'), 'utf8'), 'Figure 1 | p.1 | caption: p1-s1\n');
+  assert.equal((await fs.stat(path.join(w, 'paper.txt'))).mode & 0o777, 0o600);
+  assert.doesNotMatch(await fs.readFile(path.join(w, 'TASK.md'), 'utf8'), /source\.json/);
+  assert.match(await fs.readFile(path.join(w, 'TASK.md'), 'utf8'), /논문 ID: `p`/);
   await cleanupWorkdir(w);
   await assert.rejects(fs.stat(w));
 
@@ -48,7 +57,7 @@ test('prepareWorkdir creates exactly the allowed files; cleanup removes them', a
     researchContext: path.join(d, 'ctx.md'), previousDigest: path.join(d, 'prev.json'),
   });
   // The research-context feature is gone: a stray option copies nothing.
-  assert.deepEqual((await fs.readdir(w2)).sort(), ['TASK.md', 'digest.json', 'digest.md', 'source.json']);
+  assert.deepEqual((await fs.readdir(w2)).sort(), ['TASK.md', 'digest.json', 'digest.md', 'figures.txt', 'paper.txt']);
   assert.doesNotMatch(await fs.readFile(path.join(w2, 'TASK.md'), 'utf8'), /research-context/);
   await cleanupWorkdir(w2);
   await cleanupWorkdir(w2); // idempotent
