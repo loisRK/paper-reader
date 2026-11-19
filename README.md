@@ -4,7 +4,7 @@
 
 긴 논문을 끝까지 붙잡고 있기 힘든 독자(예: ADHD)를 염두에 두고 만들었습니다.
 
-- 🔎 **검색**: OpenAlex로 최근 논문을 찾아 세 갈래(🔥 인용 급상승 / 🌱 신흥 주제 / 🏛 저널 흐름)로 골라 줍니다. preprint·학회 논문·리뷰·editorial 등은 제외하고 저널 원저만 남깁니다.
+- 🔎 **검색**: OpenAlex로 최근 논문을 찾아 세 갈래(🔥 인용 급증 / 🌱 새 주제 / 🏛 저널 흐름)로 골라 줍니다. preprint·학회 논문·리뷰·editorial 등은 제외하고 저널 원저만 남깁니다.
 - 📄 **추출**: Zotero의 PDF를 `p{페이지}-s{번호}` 문장 ID가 붙은 `source.json`으로 바꿉니다.
 - 🤖 **요약**: AI 도구가 `prompts/digest.md` 규칙에 따라 `digest.json`을 씁니다. 원문 사실(`claim`)에는 반드시 근거 문장 ID가 붙고, 해석(`opinion`)은 "💬 해석"으로 구분됩니다.
 - 📖 **읽기**: 카드 하나씩 읽고, 근거 문장을 바로 확인하고, Zotero PDF의 해당 페이지로 이동합니다. 3분/10분 모드, 집중 모드, 읽은 카드 진행률을 지원합니다.
@@ -17,8 +17,9 @@
 |---|---|---|
 | Node.js | 22 이상 | 검색·검증·읽기 앱 |
 | Python | 3.10 이상 | PDF 추출(PyMuPDF) |
-| Zotero | 7 이상 | 논문 등록·PDF 보관 (메모 쓰기는 2단계 기능이며 Zotero 10 이상 필요) |
+| Zotero | 7 이상 | 논문 등록·PDF 보관 (Zotero에 메모를 쓰는 기능은 다음 단계(메모 연동·Obsidian 정리)에서 지원하며 Zotero 10 이상 필요) |
 | AI 코딩 도구 | Claude Code, Codex 등 | 검색 결과 한 줄 요약, 논문 요약 작성 |
+| 운영체제 | macOS, Linux | Windows는 지원하지 않습니다(추출기가 `.venv/bin/python` 경로를 씁니다) |
 
 ### Zotero 로컬 API 켜기
 
@@ -47,7 +48,7 @@ cp paper-reader.config.example.json paper-reader.config.json
 | `reader.port` | `5173` | 읽기 앱 포트 (`127.0.0.1`에만 열림) |
 | `search.openalexApiKey` | `null` | OpenAlex 무료 API 키 (아래 참고) |
 | `search.contactEmail` | `null` | (선택) OpenAlex 요청에 붙일 연락처 |
-| `search.monthsBack` / `perTrend` / `emergingWindowMonths` / `topJournals` | 24 / 5 / 6 / 5 | 검색 기간, 트렌드별 편수, 신흥 주제 기간(개월), 저널 수 |
+| `search.monthsBack` / `perTrend` / `emergingWindowMonths` / `topJournals` | 24 / 5 / 6 / 5 | 검색 기간, 트렌드별 편수, 새 주제 기간(개월), 저널 수 |
 | `metrics.sjrCsv` | `./data/scimagojr.csv` | SCImago(SJR) CSV 경로 |
 | `metrics.mjlCsv` | `null` | Clarivate Master Journal List CSV 경로 |
 | `researchContextFile` | `null` | (선택) 내 연구 주제를 적은 Markdown. 있으면 요약에 "내 연구와의 연결"이 추가됩니다 |
@@ -82,7 +83,7 @@ cp paper-reader.config.example.json paper-reader.config.json
 npm run search -- "LLM agent operations"     # 검색 → <outputDir>/_search/<날짜>-<slug>.json
 npm run register -- <검색파일명> 1 3          # 고른 번호를 Zotero에 등록
 npm run extract -- <citekey|itemKey>          # Zotero PDF → <outputDir>/<id>/source.json
-npm run check -- <citekey|itemKey>            # digest.json 검증 (근거 ID·section·그림 페이지)
+npm run check -- <citekey|itemKey>            # outputDir의 digest.json 검증 (근거 ID·section·그림 페이지)
 npm run reader                                # 읽기 앱: http://127.0.0.1:5173
 ```
 
@@ -94,7 +95,7 @@ npm run reader                                # 읽기 앱: http://127.0.0.1:517
 2. **itemKey**: citekey가 없으면 Zotero의 8자리 항목 key(예: `H9RA4VSE`)를 쓰세요. 항목을 오른쪽 클릭 → **"Copy Zotero URI"**(또는 Zotero 링크 복사)를 하면 `zotero://select/library/items/<KEY>` 형태가 복사되는데, 마지막 8자리가 itemKey입니다(Zotero 버전에 따라 메뉴 이름이 조금 다를 수 있습니다).
 3. **DOI**: `10.`으로 시작하는 DOI(예: `10.1016/j.xxx.2025.1`)를 넘기면 Zotero에서 DOI 필드가 같은 항목을 찾습니다(대소문자 무시). 결과 폴더 이름은 citekey, 없으면 itemKey가 됩니다.
 
-`npm run check`에는 추출 후 만들어진 폴더 이름(citekey 또는 itemKey)을 넘깁니다.
+`npm run check`에는 추출 후 만들어진 폴더 이름(citekey 또는 itemKey)을 넘깁니다. 이 명령은 `outputDir` 안의 논문만 검사하며, 저장소의 `examples/`는 `npm test`가 검증합니다.
 
 ### 예제로 먼저 둘러보기
 

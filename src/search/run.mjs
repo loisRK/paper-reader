@@ -125,8 +125,8 @@ async function main() {
   const cfg = await loadConfig();
   const r = await runSearch(query, cfg);
   const s = r.sections;
-  console.log(`🔥 인용 급상승: ${s.citationSurge.papers.length}편${s.citationSurge.note ? ` (${s.citationSurge.note})` : ''}`);
-  console.log(`🌱 신흥 주제: ${s.emergingTopics.topics.length}개${s.emergingTopics.note ? ` (${s.emergingTopics.note})` : ''}`);
+  console.log(`🔥 인용 급증: ${s.citationSurge.papers.length}편${s.citationSurge.note ? ` (${s.citationSurge.note})` : ''}`);
+  console.log(`🌱 새 주제: ${s.emergingTopics.topics.length}개${s.emergingTopics.note ? ` (${s.emergingTopics.note})` : ''}`);
   console.log(`🏛 저널 흐름: ${s.journalFlow.journals.length}개${s.journalFlow.note ? ` (${s.journalFlow.note})` : ''}`);
   console.log(`제외: ${r.excluded.length}건`);
   console.log(`저장: ${r.path}`);

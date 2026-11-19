@@ -1,4 +1,4 @@
-// 세 가지 트렌드(인용 급상승 / 신흥 주제 / 저널 흐름) 선정. 순수 함수만 둔다.
+// 세 가지 트렌드(인용 급증 / 새 주제 / 저널 흐름) 선정. 순수 함수만 둔다.
 
 export function monthsBetween(dateStr, now) {
   const d = new Date(dateStr);

@@ -138,7 +138,7 @@
       "id": "c9",
       "section": "results",
       "question": "공격이 섞인 실제 웹 서버 로그에서는?",
-      "answer": "기업 간 전이에서 F1·AUC가 모두 0.98을 넘었다.",
+      "answer": "Russell Mitchell→Santos 전이에서 F1 0.989·AUC 0.996이었고, 반대 방향도 Precision·Recall이 0.99를 넘었다.",
       "bridge": "다음으로, 공격 유형이 다양한 실제 기업 로그에서도 확인했다.",
       "items": [
         { "kind": "claim", "text": "Russell Mitchell→Santos에서 MetaLog(F1 0.946)를 앞섰다", "evidence": ["p17-s41"] },
@@ -159,7 +159,7 @@
       "id": "c10",
       "section": "analysis",
       "question": "어떤 구성요소가 성능을 만들었나?",
-      "answer": "RoPE를 빼면 F1이 가장 크게 떨어졌고, 적응형 마진과 게이트도 각각 기여했다.",
+      "answer": "HDFS→BGL에서 RoPE를 빼면 F1이 가장 크게 떨어졌고, 적응형 마진과 게이트도 각각 기여했다.",
       "bridge": "왜 이런 결과가 나왔는지는 구성요소를 하나씩 빼 보며 확인했다.",
       "items": [
         { "kind": "claim", "text": "어떤 핵심 모듈을 빼도 성능이 일관되게 떨어졌다", "evidence": ["p20-s14", "p20-s15"] },
