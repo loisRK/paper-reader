@@ -666,3 +666,41 @@ test('extract route: 409 while another extraction runs, 500 with the reason on f
   assert.match((await fail.json()).error, /스캔 PDF/);
   assert.equal((await post({ id })).status, 200);
 });
+
+async function linkServer(t, deps) {
+  const tmp = await fs.mkdtemp(path.join(os.tmpdir(), 'reader-link-'));
+  const out = path.join(tmp, 'out');
+  for (const [id, zotero] of [['unl', undefined], ['lnk', { itemKey: 'ABCD1234', attachmentKey: 'ATT00001' }]]) {
+    await fs.mkdir(path.join(out, id), { recursive: true });
+    await fs.writeFile(path.join(out, id, 'source.json'), JSON.stringify({ id, ...(zotero ? { zotero } : {}), meta: { title: id }, pdf: { path: path.join(tmp, `${id}.pdf`), md5: 'm' }, pages: [], sentences: {} }));
+  }
+  const s = createServer({ outputDir: out, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: path.join(tmp, 'none'), ...deps });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await fs.rm(tmp, { recursive: true, force: true }); });
+  return `http://127.0.0.1:${s.address().port}`;
+}
+
+test('paper list retries linking unlinked papers in the background, once per cooldown, without blocking', async (t) => {
+  const calls = [];
+  let release;
+  const gate = new Promise((r) => { release = r; });
+  const base = await linkServer(t, { linkToZotero: async (o, id) => { calls.push(id); await gate; return true; } });
+  const first = await fetch(`${base}/api/papers`); // must answer while the link attempt is still pending
+  assert.equal(first.status, 200);
+  await fetch(`${base}/api/papers`);
+  assert.deepEqual(calls, ['unl']);
+  release();
+  await new Promise((r) => setTimeout(r, 20));
+  await fetch(`${base}/api/papers`);
+  assert.deepEqual(calls, ['unl']); // cooldown: no retry within 30 s
+});
+
+test('paper list: link failures are swallowed and retried after the cooldown', async (t) => {
+  const calls = [];
+  const base = await linkServer(t, { linkCooldownMs: 0, linkToZotero: async (o, id) => { calls.push(id); throw new Error('boom'); } });
+  assert.equal((await fetch(`${base}/api/papers`)).status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.equal((await fetch(`${base}/api/papers`)).status, 200);
+  await new Promise((r) => setTimeout(r, 20));
+  assert.deepEqual(calls, ['unl', 'unl']);
+});

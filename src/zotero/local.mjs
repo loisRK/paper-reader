@@ -73,7 +73,7 @@ export function fileUrlToLocalPath(url) {
   return fileURLToPath(url);
 }
 
-async function zget(cfg, fetchImpl, pathAndQuery) {
+export async function zget(cfg, fetchImpl, pathAndQuery) {
   try {
     return await fetchImpl(`${baseUrl(cfg)}/api/users/0/${pathAndQuery}`);
   } catch {
@@ -81,7 +81,7 @@ async function zget(cfg, fetchImpl, pathAndQuery) {
   }
 }
 
-function toMeta(d) {
+export function toMeta(d) {
   return {
     title: d.title ?? '',
     authors: (d.creators ?? []).map((c) => c.name ?? [c.firstName, c.lastName].filter(Boolean).join(' ')),

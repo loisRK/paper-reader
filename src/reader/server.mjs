@@ -4,6 +4,7 @@ import path from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { loadConfig } from '../config.mjs';
 import { validateDigest } from '../digest/validate.mjs';
+import { linkToZotero as defaultLinkToZotero } from '../zotero/link.mjs';
 import { registerPaper, resolveItem as defaultResolveItem } from '../zotero/local.mjs';
 import { createNotesRoutes } from './notes-routes.mjs';
 import { readSettings, writeSettings } from '../library/settings.mjs';
@@ -130,7 +131,28 @@ export function createServer(cfg, deps = {}) {
   const { fetchImpl, examplesDir, resolveItem = defaultResolveItem, md5File: md5Impl } = deps;
   const dataDir = cfg.dataDir ?? (cfg.zotero?.authFile ? path.dirname(cfg.zotero.authFile) : null);
   const out = cfg.outputDir;
-  const runExtract = createExtractJob({ cfg, dataDir, md5: md5Impl, extractFile: deps.extractFile, linkToZotero: deps.linkToZotero, linkDeps: { fetchImpl } });
+  const linkToZotero = deps.linkToZotero ?? defaultLinkToZotero;
+  const runExtract = createExtractJob({ cfg, dataDir, md5: md5Impl, extractFile: deps.extractFile, linkToZotero, linkDeps: { fetchImpl } });
+  // Retry linking unlinked folder papers in the background: one at a time, same paper not again within the cooldown.
+  const linkCooldownMs = deps.linkCooldownMs ?? 30_000;
+  const linkTried = new Map();
+  let linking = false;
+  function linkInBackground(bundles) {
+    if (linking) return;
+    const now = Date.now();
+    const todo = bundles
+      .filter((b) => !b.example && !b.source.zotero && typeof b.source.pdf?.path === 'string'
+        && now - (linkTried.get(b.id) ?? -Infinity) >= linkCooldownMs)
+      .map((b) => b.id);
+    if (!todo.length) return;
+    linking = true;
+    (async () => {
+      for (const id of todo) {
+        linkTried.set(id, Date.now());
+        try { await linkToZotero(out, id, cfg, { fetchImpl }); } catch { /* quiet; retried on a later list */ }
+      }
+    })().finally(() => { linking = false; });
+  }
   const opts = { examplesDir };
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
@@ -180,6 +202,7 @@ export function createServer(cfg, deps = {}) {
 
     if (parts[1] === 'papers' && parts.length === 2 && method === 'GET') {
       const bundles = await listPaperBundles(out, opts);
+      linkInBackground(bundles);
       const list = bundles.map((b) => {
         const { digest } = validated(b);
         const cards = digest?.cards ?? [];
