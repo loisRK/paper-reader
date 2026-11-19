@@ -117,13 +117,18 @@ test('serves index.html at / and blocks static traversal', async () => {
   assert.equal(res.status, 200);
   assert.match(res.headers.get('content-type'), /text\/html/);
   assert.equal((await fetch(`${base}/nope.js`)).status, 404);
-  const raw = await new Promise((resolve) => {
+  const port = server.address().port;
+  const rawGet = (target) => new Promise((resolve) => {
     import('node:net').then(({ default: net }) => {
-      const s = net.connect(server.address().port, '127.0.0.1', () => s.write('GET /../../package.json HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n'));
+      const s = net.connect(port, '127.0.0.1', () => s.write(`GET ${target} HTTP/1.1\r\nHost: 127.0.0.1:${port}\r\nConnection: close\r\n\r\n`));
       let buf = ''; s.on('data', (d) => { buf += d; }); s.on('end', () => resolve(buf));
     });
   });
-  assert.match(raw, /^HTTP\/1.1 (400|403|404)/);
+  for (const target of ['/../../package.json', '/%2e%2e/%2e%2e/package.json', '/..%2f..%2fpackage.json', '/..%5c..%5cpackage.json']) {
+    const raw = await rawGet(target);
+    assert.match(raw, /^HTTP\/1.1 (400|404)/, target);
+    assert.ok(!raw.includes('"name": "paper-reader"'), `${target} leaked package.json`);
+  }
 });
 
 test('oversized body returns 413', async () => {
