@@ -1209,4 +1209,24 @@ test('connections API: 400 without a research note, vault-only reads, 202 job, G
 
   // cancel route: nothing running → 404
   assert.equal((await ctx.jpost('/api/papers/d1/connections-job/cancel')).status, 404);
+  assert.equal((await fetch(`${ctx.b}/api/papers/ghost/connections`)).status, 404);
+
+  // while a connections job runs (2nd run never finishes): PUT/DELETE → 409, file untouched; after cancel edits work
+  const before = await fs.readFile(path.join(ctx.out, 'd1', 'connections.json'), 'utf8');
+  assert.equal((await ctx.jpost('/api/papers/d1/connections')).status, 202);
+  for (let i = 0; i < 200 && ctx.calls.length < 2; i += 1) await new Promise((r) => setTimeout(r, 5));
+  const busyPut = await send('PUT', '/api/papers/d1/connections/k1', { text: '실행 중 수정' });
+  assert.equal(busyPut.status, 409);
+  assert.equal((await busyPut.json()).error, '연구 연결 메모를 만드는 중에는 고칠 수 없습니다. 끝난 뒤 다시 시도하세요.');
+  const busyDel = await fetch(`${ctx.b}/api/papers/d1/connections/k1`, { method: 'DELETE' });
+  assert.equal(busyDel.status, 409);
+  assert.equal(await fs.readFile(path.join(ctx.out, 'd1', 'connections.json'), 'utf8'), before);
+  assert.equal((await ctx.jpost('/api/papers/d1/connections-job/cancel')).status, 200);
+  for (let i = 0; i < 400; i += 1) {
+    if ((await (await fetch(`${ctx.b}/api/papers/d1/connections-job`)).json()).state === 'cancelled') break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  const after = await send('PUT', '/api/papers/d1/connections/k1', { text: '끝난 뒤 수정' });
+  assert.equal(after.status, 200);
+  assert.equal((await after.json()).connections.items[0].text, '끝난 뒤 수정');
 });

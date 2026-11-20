@@ -270,10 +270,13 @@ test('connections job: one job at a time across kinds; 404 unknown, 400 example,
   await assert.rejects(c.jobs.start('p1', { kind: 'connections' }), (e) => e.status === 409);
   // digest cancel does not touch the connections job
   assert.equal(c.jobs.cancel('p1'), false);
+  assert.equal(c.jobs.active('p1', 'connections'), true);
+  assert.equal(c.jobs.active('p1'), false);
   await waitFor(() => c.calls.length === 1);
   assert.equal(c.jobs.cancel('p1', 'connections'), true);
   await settled(c.jobs, 'p1', 'connections');
   assert.equal(c.jobs.get('p1', 'connections').state, 'cancelled');
+  assert.equal(c.jobs.active('p1', 'connections'), false);
   assert.equal(await exists(c.calls[0].workdir), false);
   await assert.rejects(c.jobs.start('ghost', { kind: 'connections' }), (e) => e.status === 404);
   await assert.rejects(c.jobs.start('ex1', { kind: 'connections' }), (e) => e.status === 400);

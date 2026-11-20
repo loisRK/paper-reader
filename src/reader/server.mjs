@@ -535,7 +535,10 @@ export function createServer(cfg, deps = {}) {
         try { return await fn(); } catch (err) { if (err.status) throw new HttpError(err.status, err.message); throw err; }
       };
       if (parts.length === 4) {
-        if (method === 'GET') return sendJson(res, 200, { connections: await connCall(() => readConnectionsFile(out, id)) });
+        if (method === 'GET') {
+          if (!(await readPaper(out, id, opts))) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+          return sendJson(res, 200, { connections: await connCall(() => readConnectionsFile(out, id)) });
+        }
         if (method !== 'POST') throw new HttpError(405, '허용되지 않는 메서드입니다.');
         await readBody(req);
         if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
@@ -543,6 +546,10 @@ export function createServer(cfg, deps = {}) {
       }
       const itemId = checkName(parts[4], '항목 id');
       if (!(await readPaper(out, id, opts))) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+      // A running job would overwrite the edit when it saves.
+      if ((method === 'PUT' || method === 'DELETE') && digestJobs.active(id, 'connections')) {
+        throw new HttpError(409, '연구 연결 메모를 만드는 중에는 고칠 수 없습니다. 끝난 뒤 다시 시도하세요.');
+      }
       if (method === 'PUT') {
         const body = await readBody(req);
         return sendJson(res, 200, { connections: await connCall(() => editConnectionItem(out, id, itemId, body?.text)) });

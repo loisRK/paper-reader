@@ -392,5 +392,8 @@ export function createDigestJobs({ cfg, deps = {} }) {
     clearTimeout(timer);
   }
 
-  return { start, get: (paperId, kind = 'digest') => snapshot(last[kind]?.get(paperId)), cancel, shutdown };
+  /** True while a job of `kind` for this paper is running (not yet done/failed/cancelled). */
+  const active = (paperId, kind = 'digest') => Boolean(current && current !== 'starting' && current.kind === kind && current.ids.has(paperId));
+
+  return { start, get: (paperId, kind = 'digest') => snapshot(last[kind]?.get(paperId)), cancel, active, shutdown };
 }
