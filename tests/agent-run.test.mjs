@@ -124,7 +124,8 @@ test('runAgent: line-wise logs, claude stream-json summarized, spawn options', a
 test('runAgent: codex output lines are logged raw and truncated to 200 chars', async () => {
   const { impl, calls } = fakeSpawn();
   const logs = [];
-  const { done } = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: impl, onLog: (l) => logs.push(l) });
+  const { done } = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: impl, listMcpServers: async () => [], onLog: (l) => logs.push(l) });
+  await tick();
   calls[0].child.stdout.write(`hello\n${'y'.repeat(500)}\npartial`);
   calls[0].child.stdout.end(); calls[0].child.stderr.end();
   await tick();
@@ -170,7 +171,8 @@ test('runAgent: errorHint for login and usage-limit output', async () => {
   ]) {
     const id = hint.includes('codex') ? 'codex' : 'claude';
     const { impl, calls } = fakeSpawn();
-    const { done } = runAgent({ id, workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+    const { done } = runAgent({ id, workdir: W, prompt: 'P', spawnImpl: impl, listMcpServers: async () => [], onLog() {} });
+    await tick();
     calls[0].child.stderr.write(`${text}\n`);
     calls[0].child.stdout.end(); calls[0].child.stderr.end();
     await tick();
@@ -275,19 +277,44 @@ test('runAgent: paper text in stream-json does not trigger a login/limit hint', 
 
 test('runAgent codex: disables the MCP servers the user config lists', async () => {
   const { impl, calls } = fakeSpawn();
-  const seen = [];
-  runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {}, listMcpServers: () => { seen.push(1); return ['node_repl', 'slack']; } });
-  assert.equal(seen.length, 1);
+  runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: impl, onLog() {}, listMcpServers: async () => ['node_repl', 'slack'] });
+  assert.equal(calls.length, 0, 'not spawned before the listing resolves');
+  await tick(); await tick();
   assert.ok(calls[0].args.includes('mcp_servers.node_repl.enabled=false') && calls[0].args.includes('mcp_servers.slack.enabled=false'));
-  // listing fails -> no run (never start with unknown MCP servers enabled)
-  const f = fakeSpawn();
-  const r = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: f.impl, onLog() {}, listMcpServers: () => { throw new Error('x'); } });
-  assert.equal(f.calls.length, 0);
-  assert.ok((await r.done).errorHint);
-  // claude never lists
+  // claude never lists and still spawns synchronously
   const c = fakeSpawn();
   runAgent({ id: 'claude', workdir: W, prompt: 'P', spawnImpl: c.impl, onLog() {}, listMcpServers: () => { throw new Error('no'); } });
   assert.equal(c.calls.length, 1);
+});
+
+test('runAgent codex: listing fails -> no spawn, hint', async () => {
+  for (const list of [async () => { throw new Error('x'); }, () => { throw new Error('y'); }]) {
+    const f = fakeSpawn();
+    const r = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: f.impl, onLog() {}, listMcpServers: list });
+    const res = await r.done;
+    assert.equal(f.calls.length, 0);
+    assert.equal(res.errorHint, 'Codex MCP 설정을 확인하지 못해 실행하지 않았습니다.');
+  }
+});
+
+test('runAgent codex: cancel during a never-resolving listing -> done resolves, no spawn; loop not blocked', async () => {
+  const f = fakeSpawn();
+  const r = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: f.impl, onLog() {}, listMcpServers: () => new Promise(() => {}) });
+  let fired = false;
+  setImmediate(() => { fired = true; });
+  await tick();
+  assert.ok(fired, 'event loop is free while the listing is pending');
+  r.cancel();
+  const res = await r.done;
+  assert.equal(res.errorHint, undefined);
+  assert.equal(f.calls.length, 0);
+  // a listing that resolves after the cancel must not spawn either
+  let release;
+  const g = fakeSpawn();
+  const r2 = runAgent({ id: 'codex', workdir: W, prompt: 'P', spawnImpl: g.impl, onLog() {}, listMcpServers: () => new Promise((res2) => { release = res2; }) });
+  r2.cancel(); await tick(); release(['a']);
+  await r2.done; await tick();
+  assert.equal(g.calls.length, 0);
 });
 
 test('runAgent reports the model from the first init event (claude) or the codex header', async () => {
@@ -297,7 +324,8 @@ test('runAgent reports the model from the first init event (claude) or the codex
     ['claude', '{"type":"result","is_error":false}\n', '', undefined],
   ]) {
     const { impl, calls } = fakeSpawn();
-    const { done } = runAgent({ id, workdir: W, prompt: 'P', spawnImpl: impl, onLog() {} });
+    const { done } = runAgent({ id, workdir: W, prompt: 'P', spawnImpl: impl, listMcpServers: async () => [], onLog() {} });
+    await tick();
     calls[0].child.stdout.write(out);
     calls[0].child.stderr.write(err);
     calls[0].child.stdout.end(); calls[0].child.stderr.end();

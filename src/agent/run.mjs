@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn, execFileSync } from 'node:child_process';
+import { spawn, execFile } from 'node:child_process';
 import { agentCommand } from './commands.mjs';
 import { paperText, figuresText } from './paper-text.mjs';
 import { cleanModel } from './models.mjs';
@@ -21,10 +21,17 @@ const LOG_MAX = 200;
 
 /** Names of the MCP servers the user's config.toml defines (plugin servers are off via features.plugins=false). Throws if it cannot tell. */
 export function listCodexMcpServers() {
-  const out = execFileSync('codex', ['-c', 'features.plugins=false', '-c', 'features.apps=false', 'mcp', 'list', '--json'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 });
-  const list = JSON.parse(out);
-  if (!Array.isArray(list)) throw new Error('unexpected mcp list');
-  return list.map((x) => String(x.name));
+  return new Promise((resolve, reject) => {
+    execFile('codex', ['-c', 'features.plugins=false', '-c', 'features.apps=false', 'mcp', 'list', '--json'],
+      { encoding: 'utf8', timeout: 15_000, maxBuffer: 1 << 20, windowsHide: true }, (err, stdout) => {
+        if (err) return reject(err);
+        try {
+          const list = JSON.parse(stdout);
+          if (!Array.isArray(list)) throw new Error('unexpected mcp list');
+          resolve(list.map((x) => String(x.name)));
+        } catch (e) { reject(e); }
+      });
+  });
 }
 
 function inside(parent, child) {
@@ -120,14 +127,40 @@ function hintFor(id, text, label) {
 
 const SPAWN_FAIL = 'AI 도구를 실행할 수 없습니다. 설치되어 있는지 확인하세요.';
 
-export function runAgent({
+const MCP_FAIL = 'Codex MCP 설정을 확인하지 못해 실행하지 않았습니다.';
+
+/**
+ * Returns { done, cancel } synchronously. Codex first lists the user's MCP servers (async, so the event loop is
+ * never blocked) and is spawned only once every one can be switched off; a failure or a cancel during the
+ * listing means it is never spawned.
+ */
+export function runAgent(opts) {
+  if (opts.id !== 'codex') return launchAgent(opts, []);
+  const list = opts.listMcpServers ?? listCodexMcpServers;
+  let cancelled = false;
+  let inner = null;
+  let resolveEarly;
+  const early = new Promise((r) => { resolveEarly = r; });
+  const stop = (errorHint) => resolveEarly({ code: null, signal: null, timedOut: false, ...(errorHint ? { errorHint } : {}) });
+  Promise.resolve().then(() => list()).then((names) => {
+    if (cancelled) return;
+    inner = launchAgent(opts, names);
+    inner.done.then(resolveEarly);
+  }, () => { if (!cancelled) stop(MCP_FAIL); });
+  return {
+    done: early,
+    cancel() { cancelled = true; if (inner) inner.cancel(); else stop(); },
+  };
+}
+
+function launchAgent({
   id, workdir, prompt, configDir, label, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
-  spawnImpl = spawn, listMcpServers = listCodexMcpServers, killImpl = process.kill, onLog = () => {},
-}) {
+  spawnImpl = spawn, killImpl = process.kill, onLog = () => {},
+}, mcpServers) {
   const failed = (hint) => ({ done: Promise.resolve({ code: null, signal: null, timedOut: false, errorHint: hint }), cancel() {} });
   let child;
   try {
-    const { cmd, args, files, env } = agentCommand(id, { workdir, prompt, configDir, mcpServers: id === 'codex' ? listMcpServers() : [] });
+    const { cmd, args, files, env } = agentCommand(id, { workdir, prompt, configDir, mcpServers });
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(workdir, rel);
       fs.mkdirSync(path.dirname(file), { recursive: true });
