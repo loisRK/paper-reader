@@ -285,12 +285,17 @@ export function createServer(cfg, deps = {}) {
     return { vault: o?.vault ?? '', folder: o?.folder ?? DEFAULT_FOLDER, researchNote: o?.researchNote ?? null, vaultOk };
   }
   async function readConnections(id) {
+    let raw;
     try {
-      const c = JSON.parse(await fs.readFile(path.join(out, id, 'connections.json'), 'utf8'));
-      return c && typeof c === 'object' && Array.isArray(c.items) ? c : null;
-    } catch {
-      return null;
+      raw = await fs.readFile(path.join(out, id, 'connections.json'), 'utf8');
+    } catch (err) {
+      if (err.code === 'ENOENT') return null; // not created yet
+      throw new HttpError(500, '연결 메모 파일을 읽지 못해 보내지 않았습니다.');
     }
+    let c;
+    try { c = JSON.parse(raw); } catch { c = null; }
+    if (!c || typeof c !== 'object' || !Array.isArray(c.items)) throw new HttpError(500, '연결 메모 파일을 읽지 못해 보내지 않았습니다.');
+    return c;
   }
   async function exportToObsidian(id) {
     const o = (await savedSettings()).obsidian;
@@ -298,7 +303,11 @@ export function createServer(cfg, deps = {}) {
     const b = await readPaper(out, id, opts);
     if (!b) throw new HttpError(404, '논문을 찾을 수 없습니다.');
     const digest = b.rawDigest === null ? null : validated(b).digest;
-    const notes = b.example ? null : await readNotes(out, id).catch(() => null);
+    // A missing notes.json reads as empty; any other read/parse error stops the export (never rewrite memos as "none").
+    let notes = null;
+    if (!b.example) {
+      try { notes = await readNotes(out, id); } catch { throw new HttpError(500, '메모 파일을 읽지 못해 보내지 않았습니다.'); }
+    }
     const connections = digest ? await readConnections(id) : null;
     let headings = null;
     let researchNoteName = null;

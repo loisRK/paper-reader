@@ -1105,6 +1105,26 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.match((await broken.json()).error, /paper-reader 표시가 깨져/);
   assert.equal(await fs.readFile(file, 'utf8'), 'broken');
 
+  // unreadable notes.json / connections.json → 500, vault file untouched (missing files are fine: see f1 below)
+  await fs.writeFile(file, `${text}`);
+  const notesFile = path.join(out, 'z1', 'notes.json');
+  const goodNotes = await fs.readFile(notesFile, 'utf8');
+  await fs.writeFile(notesFile, '{broken');
+  const badNotes = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(badNotes.status, 500);
+  assert.equal((await badNotes.json()).error, '메모 파일을 읽지 못해 보내지 않았습니다.');
+  assert.equal(await fs.readFile(file, 'utf8'), text);
+  await fs.writeFile(notesFile, goodNotes);
+  const connFile = path.join(out, 'z1', 'connections.json');
+  await fs.writeFile(connFile, '{broken');
+  const badConn = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(badConn.status, 500);
+  assert.equal((await badConn.json()).error, '연결 메모 파일을 읽지 못해 보내지 않았습니다.');
+  assert.equal(await fs.readFile(file, 'utf8'), text);
+  await fs.rm(connFile);
+  assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
+  assert.ok((await fs.readFile(file, 'utf8')).includes('연결 메모를 아직 만들지 않았습니다.'));
+
   // folder paper without Zotero and without digest; example paper
   assert.equal((await (await send('POST', '/api/papers/f1/obsidian', {})).json()).relPath, 'Notes/Papers/f1 읽기 노트.md');
   const f1 = await fs.readFile(path.join(vault, 'Notes/Papers/f1 읽기 노트.md'), 'utf8');

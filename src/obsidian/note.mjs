@@ -54,16 +54,32 @@ function locator(pages) {
   return consecutive ? `pp. ${pages[0]}–${pages.at(-1)}` : `pp. ${pages.join(', ')}`;
 }
 
+// Sentences adjacent in the source (same page and block, consecutive sequence numbers) join with a space;
+// any gap is shown as " … " so no quote reads as a continuous passage that the paper does not contain.
+function joinSentences(sentences, sids) {
+  let text = '';
+  sids.forEach((sid, i) => {
+    const s = sentences[sid];
+    if (i > 0) {
+      const p = sentences[sids[i - 1]];
+      const adjacent = p.page === s.page && (p.block ?? null) === (s.block ?? null) && seqOf(sid) === seqOf(sids[i - 1]) + 1;
+      text += adjacent ? ' ' : ' … ';
+    }
+    text += str(s.text);
+  });
+  return inline(text);
+}
+
 // One quote line per page, sentences in reading order.
 function quoteLines(sentences, sids, prefix) {
   const out = [];
   let cur = null;
   for (const sid of sids) {
-    const s = sentences[sid];
-    if (cur && cur.page === s.page) cur.texts.push(s.text);
-    else out.push(cur = { page: s.page, texts: [s.text] });
+    const page = sentences[sid].page;
+    if (cur && cur.page === page) cur.sids.push(sid);
+    else out.push(cur = { page, sids: [sid] });
   }
-  return out.map((g) => `${prefix}"${inline(g.texts.join(' '))}" (p.${g.page})`);
+  return out.map((g) => `${prefix}"${joinSentences(sentences, g.sids)}" (p.${g.page})`);
 }
 
 /** Headings (#..######) of a Markdown note, outside frontmatter and code fences. */
@@ -125,7 +141,8 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
   const info = citekey ? [`원 노트: [[@${citekey}]]`, `인용: [@${citekey}]`] : [`논문 id: ${inline(id)}`];
   if (doi) info.push(`DOI: [${doi}](https://doi.org/${encodeURI(doi)})`);
   L.push(`> [!info] ${info.join(' · ')}`);
-  L.push(`> 이 칸은 paper-reader에서 보낼 때마다 새로 씁니다(보낸 시각 ${at}). 내 글은 맨 아래 "내 생각"에 적으세요.`, '');
+  L.push(`> 이 칸은 paper-reader에서 보낼 때마다 새로 씁니다(보낸 시각 ${at}). 내 글은 맨 아래 "내 생각"에 적으세요.`);
+  L.push('> 쪽 번호는 PDF 쪽 기준입니다(인쇄된 쪽과 다를 수 있음).', '');
 
   const cards = Array.isArray(digest?.cards) ? digest.cards : [];
   if (!digest) {
@@ -142,6 +159,7 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
         const section = SECTION_LABELS[c.section] ?? inline(c.section);
         L.push(`### ${i + 1}. ${inline(c.question)}${section ? ` · ${section}` : ''}`);
         if (inline(c.answer)) L.push(para(c.answer));
+        if (inline(c.explain)) L.push('', para(c.explain), '');
         for (const it of c.items ?? []) {
           const ev = known(sentences, it.evidence);
           L.push(`- ${inline(it.text)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '));
@@ -166,13 +184,13 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
   const marks = [];
   for (const h of Array.isArray(notes?.highlights) ? notes.highlights : []) {
     const sids = known(sentences, h?.sentenceIds);
-    if (sids.length) marks.push({ sids, texts: sids.map((s) => sentences[s].text), color: h.color, comment: h.comment, zotero: false });
+    if (sids.length) marks.push({ sids, text: joinSentences(sentences, sids), color: h.color, comment: h.comment, zotero: false });
   }
   for (const a of Array.isArray(notes?.zoteroAnnotations) ? notes.zoteroAnnotations : []) {
     const sids = known(sentences, a?.sentenceIds);
     const text = sids.length ? null : str(a?.text);
     if (!sids.length && !text) continue;
-    marks.push({ sids, texts: sids.length ? sids.map((s) => sentences[s].text) : [text], page: a.page, color: a.color, comment: a.comment, zotero: true });
+    marks.push({ sids, text: sids.length ? joinSentences(sentences, sids) : inline(text), page: a.page, color: a.color, comment: a.comment, zotero: true });
   }
   const firstPage = (m) => (m.sids.length ? sentences[m.sids[0]].page : Number.isFinite(m.page) ? m.page : Infinity);
   const firstSeq = (m) => (m.sids.length ? seqOf(m.sids[0]) : Infinity);
@@ -182,7 +200,7 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
     const { callout, label } = signalOf(m.color);
     const pages = m.sids.length ? pagesOf(sentences, m.sids) : Number.isFinite(m.page) ? [m.page] : [];
     const where = pages.length ? ` · p.${pageRange(pages)}` : '';
-    L.push(`> [!${callout}] ${label}${where}${m.zotero ? ' (Zotero)' : ''}`, `> ${inline(m.texts.join(' '))}`);
+    L.push(`> [!${callout}] ${label}${where}${m.zotero ? ' (Zotero)' : ''}`, `> ${m.text}`);
     if (str(m.comment).trim()) {
       const [first, ...rest] = lines(m.comment);
       L.push('>', `> **내 메모:** ${first}`, ...rest.map((r) => `> ${r}`));

@@ -29,7 +29,7 @@ const digest = {
   takeaway: { text: '핵심 문장이다.', evidence: ['p1-s1', 'p3-s1'], why: 'w' },
   cards: [
     {
-      id: 'c1', section: 'motivation', question: '왜 필요한가?', answer: '답이다.', explain: 'e', bridge: '',
+      id: 'c1', section: 'motivation', question: '왜 필요한가?', answer: '답이다.', explain: '쉬운  설명이다.', bridge: '',
       items: [{ kind: 'claim', label: '', text: '주장 하나.', evidence: ['p1-s2'] },
         { kind: 'claim', label: '', text: '주장 둘.', evidence: ['p2-s2', 'p3-s1'] }],
       bigNumbers: [], tables: [], figures: [],
@@ -80,8 +80,8 @@ test('companion note: frontmatter, header, takeaway with citation and quotes', (
 
 test('companion note: card summaries with claims, bigNumbers and tables', () => {
   const md = build();
-  assert.ok(md.includes('## 카드 요약\n### 1. 왜 필요한가? · 동기\n답이다.\n- 주장 하나. [@KimEtAlX2025, p. 1]\n  > "Second sentence." (p.1)\n- 주장 둘. [@KimEtAlX2025, pp. 2–3]\n  > "Page two more." (p.2)\n  > "Page three." (p.3)\n'), md);
-  assert.ok(md.includes('### 2. 결과는? · 결과\n좋다.\n- **42%** 정확도 [@KimEtAlX2025, p. 2]\n  > "Page two more." (p.2)\n- 표: 표 1 [@KimEtAlX2025, p. 3]\n  > "Page three." (p.3)\n\n| 모델 | 점수 |\n| --- | --- |\n| A | 1\\|2 |\n'), md);
+  assert.ok(md.includes('## 카드 요약\n### 1. 왜 필요한가? · 동기\n답이다.\n\n쉬운 설명이다.\n\n- 주장 하나. [@KimEtAlX2025, p. 1]\n  > "Second sentence." (p.1)\n- 주장 둘. [@KimEtAlX2025, pp. 2–3]\n  > "Page two more." (p.2)\n  > "Page three." (p.3)\n'), md);
+  assert.ok(md.includes('### 2. 결과는? · 결과\n좋다.\n\ne\n\n- **42%** 정확도 [@KimEtAlX2025, p. 2]\n  > "Page two more." (p.2)\n- 표: 표 1 [@KimEtAlX2025, p. 3]\n  > "Page three." (p.3)\n\n| 모델 | 점수 |\n| --- | --- |\n| A | 1\\|2 |\n'), md);
 });
 
 test('companion note: highlights with stoplight colors, sentence order, memos, Zotero annotations', () => {
@@ -104,7 +104,28 @@ test('companion note: highlights with stoplight colors, sentence order, memos, Z
 
 test('companion note: highlight across pages shows a page range', () => {
   const md = build({ notes: { highlights: [{ id: 'h', sentenceIds: ['p3-s1', 'p2-s2'], color: '#ffd400', comment: '' }] } });
-  assert.ok(md.includes('> [!paper-yellow] 🟡 천천히 읽기 · p.2–3\n> Page two more. Page three.\n'));
+  assert.ok(md.includes('> [!paper-yellow] 🟡 천천히 읽기 · p.2–3\n> Page two more. … Page three.\n'));
+});
+
+test('quotes join only sentences adjacent in the source; gaps show " … "', () => {
+  const src = {
+    ...source,
+    sentences: {
+      'p1-s1': { text: 'One.', page: 1, block: 'b1' },
+      'p1-s2': { text: 'Two.', page: 1, block: 'b1' },
+      'p1-s3': { text: 'Three.', page: 1, block: 'b2' },
+      'p1-s5': { text: 'Five.', page: 1, block: 'b2' },
+    },
+  };
+  const dg = { ...digest, takeaway: { text: 'T.', evidence: ['p1-s5', 'p1-s1', 'p1-s2', 'p1-s3'] }, cards: [] };
+  const md = build({ source: src, digest: dg, notes: { highlights: [{ id: 'h', sentenceIds: ['p1-s1', 'p1-s5'], color: '#ffd400', comment: '' }] } });
+  // s1–s2 same block and consecutive → space; s2→s3 new block → gap; s3→s5 skips s4 → gap
+  assert.ok(md.includes('> "One. Two. … Three. … Five." (p.1)\n'), md);
+  assert.ok(md.includes('> [!paper-yellow] 🟡 천천히 읽기 · p.1\n> One. … Five.\n'));
+});
+
+test('info callout says page numbers are PDF pages', () => {
+  assert.ok(build().includes('> 쪽 번호는 PDF 쪽 기준입니다(인쇄된 쪽과 다를 수 있음).\n'));
 });
 
 test('companion note: connections absent vs present (missing heading flagged)', () => {
