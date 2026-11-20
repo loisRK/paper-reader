@@ -370,6 +370,71 @@ test('writeNotes + builders: re-export updates owned keys (summary link, keyword
   await fs.rm(root, { recursive: true, force: true });
 });
 
+test('mergeManaged: an owned key spanning blank lines or comments is replaced whole', () => {
+  const fresh = `---\ntitle: "NEW"\nauthors: ["A"]\n---\n${BEGIN}\nNEW\n${END}\n`;
+  const run = (fm) => mergeManaged(`---\n${fm}\n---\n${BEGIN}\nOLD\n${END}\n`, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text;
+  assert.equal(run('authors:\n\n- X\n- Y\nmine: 1'), `---\nauthors: ["A"]\nmine: 1\ntitle: "NEW"\n---\n${BEGIN}\nNEW\n${END}\n`);
+  assert.equal(run('authors:\n# c\n- X\nmine: 1'), `---\nauthors: ["A"]\nmine: 1\ntitle: "NEW"\n---\n${BEGIN}\nNEW\n${END}\n`);
+  assert.equal(run('title: >\n  old\n\n  more\nmine: 1'), `---\ntitle: "NEW"\nmine: 1\nauthors: ["A"]\n---\n${BEGIN}\nNEW\n${END}\n`);
+  // a comment or blank line after the value (before the next key) is the user's and stays
+  assert.equal(run('title: old\n# keep me\n\nmine: 1'), `---\ntitle: "NEW"\n# keep me\n\nmine: 1\nauthors: ["A"]\n---\n${BEGIN}\nNEW\n${END}\n`);
+});
+
+test('mergeManaged: frontmatter it cannot read safely is left untouched (body still updates)', () => {
+  const fresh = `---\ncitekey: "x"\ntitle: "NEW"\n---\n${BEGIN}\nNEW\n${END}\n`;
+  for (const fm of [
+    'title: "A long\ncontinued"',          // quoted value continuing on an unindented line
+    "title: 'open\nmore'",
+    'mine: "a\ntitle: b"',                 // a key-looking line inside a user's open quote
+    'title: [a,\nb]',                      // orphan line
+    '"title": old',                        // quoted key
+    'title : old',                         // spaced key
+    'title: |\n  x\n- y',                  // list item after a block scalar
+    'stray text\ntitle: old',
+  ]) {
+    const existing = `---\n${fm}\n---\n${BEGIN}\nOLD\n${END}\n`;
+    assert.equal(mergeManaged(existing, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text, `---\n${fm}\n---\n${BEGIN}\nNEW\n${END}\n`, fm);
+  }
+});
+
+test('mergeManaged: an owned key the app no longer emits is removed (e.g. a DOI that was deleted)', () => {
+  const fresh = `---\ncitekey: "x"\n---\n${BEGIN}\nNEW\n${END}\n`;
+  const existing = `---\ncitekey: "x"\ndoi: "10.1/old"\nmine: 1\n---\n${BEGIN}\nOLD\n${END}\n`;
+  assert.equal(mergeManaged(existing, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text, `---\ncitekey: "x"\nmine: 1\n---\n${BEGIN}\nNEW\n${END}\n`);
+});
+
+test('mergeManaged (fuzz): lines of keys the app does not own never change', () => {
+  let seed = 42;
+  const rnd = (n) => { seed = (seed * 1103515245 + 12345) % 2147483648; return seed % n; };
+  const keys = ['title', 'authors', 'summary', 'doi', 'mine', 'tags', 'aliases', 'status'];
+  const values = [' x', ' "q"', " 'q'", ' [a, b]', '', ' >', ' |', ' "open', ' 1'];
+  const tails = ['  - item', '- item', '  more', '', '# c', '  # c', 'stray', 'other: 2'];
+  const fresh = `---\ncitekey: "k"\ntitle: "NEW"\nauthors: ["A"]\nsummary: "S"\n---\n${BEGIN}\nNEW\n${END}\n`;
+  const isKey = (l) => /^[A-Za-z_][\w-]*:(?:[ \t]|$)/.test(l);
+  for (let round = 0; round < 3000; round += 1) {
+    const lines = [];
+    for (let i = 0, n = 1 + rnd(7); i < n; i += 1) {
+      lines.push(`${keys[rnd(keys.length)]}:${values[rnd(values.length)]}`);
+      for (let j = 0, m = rnd(3); j < m; j += 1) lines.push(tails[rnd(tails.length)]);
+    }
+    const head = `---\n${lines.join('\n')}\n---\n`;
+    const out = mergeManaged(`${head}${BEGIN}\nOLD\n${END}\n`, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text;
+    assert.ok(out.endsWith(`${BEGIN}\nNEW\n${END}\n`));
+    const outHead = out.slice(0, out.indexOf(BEGIN));
+    if (outHead === head) continue;
+    // every non-owned key keeps its line and everything up to the next top-level key, verbatim and together
+    for (let i = 0; i < lines.length; i += 1) {
+      const k = /^([A-Za-z_][\w-]*):/.exec(lines[i]);
+      if (!isKey(lines[i]) || PAPER_OWNED_KEYS.includes(k[1])) continue;
+      let j = i + 1;
+      while (j < lines.length && !isKey(lines[j])) j += 1;
+      const block = lines.slice(i, j).join('\n');
+      assert.ok(`\n${outHead}`.includes(`\n${block}\n`), `${head}\n=>\n${outHead}`);
+    }
+    for (const k of ['title', 'authors', 'summary']) assert.equal(outHead.split('\n').filter((l) => l.startsWith(`${k}:`)).length, 1, outHead);
+  }
+});
+
 test('mergeManaged: missing, duplicated or reversed markers → error, no text', () => {
   for (const existing of [
     'no markers',
@@ -547,4 +612,29 @@ test('settings: obsidian survives saves of other fields and vice versa', async (
   await writeSettings(d, { obsidian: two });
   assert.deepEqual((await readSettings(d)).obsidian, two);
   await fs.rm(d, { recursive: true, force: true });
+});
+
+test('quotes repair a word the extractor split at a line-end hyphen (AIOP- / SLAB)', () => {
+  const src = {
+    ...source,
+    sentences: {
+      'p2-s28': { text: 'Earlier sentence.', page: 2, block: 'b24' },
+      'p2-s29': { text: 'To demonstrate the application of our framework in evaluating LLM-based agents as the benchmark, we use AIOP-', page: 2, block: 'b25' },
+      'p2-s30': { text: 'SLAB to create 48 problems as evaluation scenarios covering different types of AIOps tasks, and register four agents from different types on those problems.', page: 2, block: 'b26' },
+      'p2-s31': { text: 'Next one.', page: 2, block: 'b26' },
+    },
+  };
+  const hl = (sids) => paper({ source: src, notes: { highlights: [{ id: 'h', sentenceIds: sids, color: '#ffd400', comment: '' }] } });
+  // highlight starting mid-word: the fragment from the previous sentence is prepended without the hyphen
+  assert.ok(hl(['p2-s30']).includes('\n> AIOPSLAB to create 48 problems as evaluation scenarios'), hl(['p2-s30']));
+  // highlight ending in "AIOP-": the next sentence's leading fragment completes the word
+  assert.ok(hl(['p2-s29']).includes('benchmark, we use AIOPSLAB\n'), hl(['p2-s29']));
+  // both sentences: joined into one word, no "AIOP- SLAB" and no " … "
+  assert.ok(hl(['p2-s29', 'p2-s30']).includes('we use AIOPSLAB to create 48 problems'), hl(['p2-s29', 'p2-s30']));
+  // evidence quotes in the summary note get the same repair
+  const dg = { ...digest, takeaway: { text: 'T.', evidence: ['p2-s30'] }, cards: [] };
+  assert.ok(summary({ source: src, digest: dg }).includes('> "AIOPSLAB to create 48 problems'), summary({ source: src, digest: dg }));
+  // ordinary hyphens and sentences without a hyphen break are left alone
+  assert.ok(hl(['p2-s31']).includes('\n> Next one.\n'));
+  assert.ok(hl(['p2-s28']).includes('\n> Earlier sentence.\n'));
 });

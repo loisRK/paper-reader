@@ -168,7 +168,7 @@ npm run extract -- <citekey|itemKey>
 
 - 두 노트는 서로 링크합니다(논문 노트의 `요약 보기 [[@<citekey> 요약]]`, 요약 노트의 `논문 노트: [[@<citekey>]]`). 요약이 없으면 논문 노트만 쓰고 `요약 없음`으로 표시합니다. Zotero에 없는 논문은 `@` 없이 논문 id로 이름을 짓고 인용을 넣지 않습니다.
 - 인용은 Pandoc 형식 `[@citekey]`, 근거에는 `[@citekey, p. 3]`처럼 쪽을 붙입니다(쪽 번호는 PDF 쪽 기준).
-- 앱은 `%% begin paper-reader %%`~`%% end paper-reader %%` 사이와 프런트매터의 앱 키(논문 노트: citekey·title·authors·year·doi·zotero·summary, 요약 노트: citekey·paper·keywords)만 다시 씁니다. `tags`나 직접 넣은 키, 표시 밖의 글은 그대로 둡니다. 표시가 깨진 노트가 있으면 두 노트 모두 쓰지 않고 어느 파일인지 알려 줍니다.
+- 앱은 `%% begin paper-reader %%`~`%% end paper-reader %%` 사이와 프런트매터의 앱 키(논문 노트: citekey·title·authors·year·doi·zotero·summary, 요약 노트: citekey·paper·keywords)만 다시 씁니다. `tags`나 직접 넣은 키, 표시 밖의 글은 그대로 둡니다(앱이 안전하게 읽을 수 없는 프런트매터는 통째로 건드리지 않습니다). 표시가 깨진 노트가 있으면 두 노트 모두 쓰지 않고 어느 파일인지 알려 줍니다.
 
 ## 저작권과 커밋되지 않는 것
 

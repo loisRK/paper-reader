@@ -64,14 +64,44 @@ function joinSentences(sentences, sids) {
   let text = '';
   sids.forEach((sid, i) => {
     const s = sentences[sid];
-    if (i > 0) {
-      const p = sentences[sids[i - 1]];
-      const adjacent = p.page === s.page && (p.block ?? null) === (s.block ?? null) && seqOf(sid) === seqOf(sids[i - 1]) + 1;
-      text += adjacent ? ' ' : ' … ';
+    let t = str(s.text).trim();
+    const prev = i > 0 ? sids[i - 1] : null;
+    const next = sids[i + 1];
+    // The extractor sometimes splits a word hyphenated at a line end into two sentences ("AIOP-" / "SLAB …").
+    const hyphenJoin = prev !== null && sentences[prev].page === s.page && seqOf(sid) === seqOf(prev) + 1
+      && HYPHEN_END.test(str(sentences[prev].text).trim());
+    if (prev !== null) {
+      const p = sentences[prev];
+      const adjacent = p.page === s.page && (p.block ?? null) === (s.block ?? null) && seqOf(sid) === seqOf(prev) + 1;
+      if (hyphenJoin) text = text.replace(/-$/, '');
+      else text += adjacent ? ' ' : ' … ';
     }
-    text += str(s.text);
+    if (!hyphenJoin) t = brokenWordBefore(sentences, sid) + t;
+    const nextJoined = next !== undefined && sentences[next].page === s.page && seqOf(next) === seqOf(sid) + 1;
+    if (!nextJoined) {
+      const tail = brokenWordAfter(sentences, sid);
+      if (tail) t = t.replace(/-$/, '') + tail;
+    }
+    text += t;
   });
   return inline(text);
+}
+
+const HYPHEN_END = /\p{L}-$/u;
+const siblingId = (sid, d) => sid.replace(/-s(\d+)$/, (_, n) => `-s${Number(n) + d}`);
+// Start of a word cut off by the previous sentence ("… we use AIOP-" → "AIOP"), or ''.
+function brokenWordBefore(sentences, sid) {
+  const prev = sentences[siblingId(sid, -1)];
+  const t = str(prev?.text).trim();
+  if (!prev || prev.page !== sentences[sid].page || !HYPHEN_END.test(t)) return '';
+  return (/(\S+)-$/.exec(t)?.[1] ?? '').replace(/^[^\p{L}\p{N}]+/u, '');
+}
+// Rest of a word this sentence cuts off at its end ("AIOP-" + next "SLAB to …" → "SLAB"), or ''.
+function brokenWordAfter(sentences, sid) {
+  if (!HYPHEN_END.test(str(sentences[sid].text).trim())) return '';
+  const next = sentences[siblingId(sid, 1)];
+  if (!next || next.page !== sentences[sid].page) return '';
+  return (/^\S+/.exec(str(next.text).trim())?.[0] ?? '').replace(/[^\p{L}\p{N}]+$/u, '');
 }
 
 // One quote line per page, sentences in reading order.
@@ -359,16 +389,50 @@ function frontmatter(text) {
   return null;
 }
 
-// Top-level entries: a `key:` line plus its indented / `- ` continuation lines. Other lines stand alone.
+// A quoted scalar that does not close on its own line continues on the next ones; we do not follow those.
+const openQuote = (v) => (v.startsWith('"') && !/^"(?:[^"\\]|\\.)*"\s*(?:#.*)?$/.test(v))
+  || (v.startsWith("'") && !/^'(?:[^']|'')*'\s*(?:#.*)?$/.test(v));
+// `"title": x` or `title : x` — a key we would not recognise, so we could duplicate it.
+const ODD_KEY = /^(?:["'][^"']*["']|[A-Za-z_][\w-]*[ \t]+)[ \t]*:/;
+
+/**
+ * Top-level entries of a frontmatter: a `key:` line plus its value lines — indented lines and `- ` items, with any
+ * blank or comment lines between them. Blank/comment lines after the last value line stand alone (they are the
+ * user's). Returns null when the block cannot be read safely: an unterminated quote, an unrecognised key form,
+ * a line that belongs to no key, or a `- ` item after a block scalar.
+ */
 function entries(lines) {
   const out = [];
+  let cur = null;
+  let pending = [];
+  const flush = () => {
+    if (cur) out.push(cur);
+    out.push(...pending.map((l) => ({ key: null, lines: [l] })));
+    cur = null;
+    pending = [];
+  };
   for (const line of lines) {
     const k = KEY_LINE.exec(line);
-    const prev = out.at(-1);
-    if (k) out.push({ key: k[1], lines: [line] });
-    else if (prev?.key && line !== '' && (/^[ \t]/.test(line) || line.startsWith('- '))) prev.lines.push(line);
-    else out.push({ key: null, lines: [line] });
+    if (k) {
+      flush();
+      const value = line.slice(k[0].length).trim();
+      if (openQuote(value)) return null;
+      cur = { key: k[1], lines: [line], block: /^[|>]/.test(value) };
+      continue;
+    }
+    if (ODD_KEY.test(line)) return null;
+    if (line.trim() === '' || /^[ \t]*#/.test(line)) {
+      if (cur) pending.push(line);
+      else out.push({ key: null, lines: [line] });
+      continue;
+    }
+    const indented = /^[ \t]/.test(line);
+    const item = line === '-' || line.startsWith('- ');
+    if (!cur || !(indented || (item && !cur.block))) return null;
+    cur.lines.push(...pending, line);
+    pending = [];
   }
+  flush();
   return out;
 }
 
@@ -382,15 +446,18 @@ function mergeFrontmatter(head, fresh, ownedKeys) {
   const old = frontmatter(head);
   const neu = frontmatter(fresh);
   if (!old || !neu) return head;
-  const want = new Map(entries(neu.lines).filter((e) => e.key && ownedKeys.includes(e.key)).map((e) => [e.key, e.lines]));
+  const oldEntries = entries(old.lines);
+  const neuEntries = entries(neu.lines);
+  if (!oldEntries || !neuEntries) return head;
+  const want = new Map(neuEntries.filter((e) => e.key && ownedKeys.includes(e.key)).map((e) => [e.key, e.lines]));
   const done = new Set();
   const lines = [];
-  for (const e of entries(old.lines)) {
+  for (const e of oldEntries) {
     if (e.key && want.has(e.key)) {
       if (!done.has(e.key)) lines.push(...want.get(e.key));
       done.add(e.key);
-    } else {
-      lines.push(...e.lines);
+    } else if (!(e.key && ownedKeys.includes(e.key))) {
+      lines.push(...e.lines); // an owned key the app no longer emits (e.g. a removed DOI) is dropped
     }
   }
   for (const [k, v] of want) if (!done.has(k)) lines.push(...v);
