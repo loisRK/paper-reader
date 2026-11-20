@@ -237,6 +237,7 @@
       ]
     }
   ],
+  "keywords": ["log anomaly detection", "cross-system transfer", "few-shot learning", "meta-learning", "contrastive learning"],
   "glossary": [
     { "term": "로그 이상 탐지(log anomaly detection)", "definition": "시스템 로그에서 비정상 동작을 자동으로 찾는 일" },
     { "term": "시스템 간 전이(cross-system transfer)", "definition": "한 시스템에서 배운 지식을 다른 시스템에 적용" },

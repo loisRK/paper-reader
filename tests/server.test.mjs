@@ -74,6 +74,9 @@ test('paper endpoint returns validated digest and problems', async () => {
   assert.ok(body.problems.includes('c1: 근거 없는 claim 제거 – bad'));
   // An old digest's opinion is dropped from the cards and shown as a problem in the banner.
   assert.ok(body.problems.includes('c2: 해석·의견 항목은 쓰지 않습니다 – o'));
+  // A digest written before keywords existed is not flagged for missing keywords.
+  assert.ok(!body.problems.some((m) => m.startsWith('keywords:')), body.problems.join('\n'));
+  assert.deepEqual(body.digest.keywords, []);
   assert.deepEqual(body.digest.cards[1].items, []);
   assert.equal(body.digest.cards.length, 2);
   assert.equal(body.links.zoteroPdf, 'zotero://open-pdf/library/items/ATT00001');

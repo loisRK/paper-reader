@@ -19,7 +19,8 @@ const source = {
 };
 const card = (over = {}) => ({ id: 'c1', section: 'method', question: 'q', answer: 'a', bridge: '', items: [], ...over });
 const TAKE = { text: 't', evidence: ['p1-s1'], why: 'w' };
-const d = (cardOver, top = {}) => ({ version: 1, paperId: 'paper1', takeaway: TAKE, cards: [card(cardOver)], glossary: [], ...top });
+const d = (cardOver, top = {}) => ({ version: 1, paperId: 'paper1', takeaway: TAKE, cards: [card(cardOver)], glossary: [], keywords: KW, ...top });
+const KW = ['AIOps', 'LLM agent', 'benchmark'];
 // The one-card digests above fail the whole-paper coverage checks; most tests look only at the rest.
 const COVERAGE = /^카드가 \d+장입니다|^빠진 섹션: |^결과 카드에 숫자|: explain\(해설\)을 2~4문장으로 쓰세요$/;
 const own = (problems) => problems.filter((p) => !COVERAGE.test(p));
@@ -102,7 +103,7 @@ test('unknown section adds a problem but keeps the card', () => {
 test('garbage input returns empty digest with problem, no throw', () => {
   for (const bad of ['oops', null, undefined, 42, [], { cards: 'x' }]) {
     const { digest, problems } = validateDigest(bad, source);
-    assert.deepEqual(digest, { version: 1, paperId: 'paper1', paperKind: 'empirical', takeaway: null, cards: [], glossary: [] });
+    assert.deepEqual(digest, { version: 1, paperId: 'paper1', paperKind: 'empirical', takeaway: null, cards: [], glossary: [], keywords: [] });
     assert.deepEqual(problems, ['digest.json 형식이 올바르지 않습니다']);
   }
 });
@@ -180,7 +181,7 @@ test('missing or non-object takeaway is reported', () => {
 });
 
 test('duplicate card ids are reported and renamed uniquely', () => {
-  const dig = { version: 1, paperId: 'paper1', takeaway: TAKE, glossary: [],
+  const dig = { version: 1, paperId: 'paper1', takeaway: TAKE, glossary: [], keywords: KW,
     cards: [card({ id: 'c1' }), card({ id: 'c1' }), card({ id: 'c1-2' }), card({ id: 'c1' })] };
   const { digest, problems } = validateDigest(dig, source);
   // ids written in the file are reserved first, so the genuine 'c1-2' keeps its id (and its read progress)
@@ -363,4 +364,49 @@ test('a card may not use the reserved id "takeaway"', () => {
   const full = fullDigest({ paperId: 'paper1' });
   full.cards[0].id = 'takeaway';
   assert.ok(validateDigest(full, LONG).problems.includes('takeaway: 카드 id로 쓸 수 없습니다 – 다른 id를 쓰세요'));
+});
+
+// --- keywords: wiki links that gather papers by term (stage 5b) ---
+
+test('keywords: 3~6 terms are kept, trimmed and whitespace-collapsed', () => {
+  const full = { ...fullDigest({ paperId: 'paper1' }), keywords: ['  AIOps ', 'LLM   agent', 'fault localization'] };
+  const { digest, problems } = validateDigest(full, LONG);
+  assert.deepEqual(problems, []);
+  assert.deepEqual(digest.keywords, ['AIOps', 'LLM agent', 'fault localization']);
+});
+
+test('keywords: missing is reported by default (new digests), tolerated with requireKeywords: false (old digests)', () => {
+  const { keywords, ...old } = fullDigest({ paperId: 'paper1' });
+  assert.deepEqual(validateDigest(old, LONG).problems, ['keywords: 없음 – 논문의 핵심 용어 3~6개를 쓰세요']);
+  const r = validateDigest(old, LONG, { requireKeywords: false });
+  assert.deepEqual(r.problems, []);
+  assert.deepEqual(r.digest.keywords, []);
+  // invalid keywords are still reported in lenient mode
+  assert.deepEqual(validateDigest({ ...old, keywords: 'AIOps' }, LONG, { requireKeywords: false }).problems,
+    ['keywords: 문자열 배열이어야 합니다']);
+});
+
+test('keywords: count, length, forbidden characters and case-insensitive duplicates', () => {
+  const base = fullDigest({ paperId: 'paper1' });
+  const check = (keywords) => validateDigest({ ...base, keywords }, LONG);
+  assert.deepEqual(check(['A', 'B']).problems, ['keywords: 2개입니다 – 3~6개를 쓰세요']);
+  const seven = ['a1', 'a2', 'a3', 'a4', 'a5', 'a6', 'a7'];
+  assert.deepEqual(check(seven).problems, ['keywords: 7개입니다 – 3~6개를 쓰세요']);
+  assert.deepEqual(check(seven).digest.keywords, seven.slice(0, 6));
+  const long = 'x'.repeat(41);
+  let r = check(['AIOps', long, '', 42, 'LLM', 'agent']);
+  assert.deepEqual(r.digest.keywords, ['AIOps', 'LLM', 'agent']);
+  assert.deepEqual(r.problems, [
+    `keywords: 1~40자로 쓰세요 – ${'x'.repeat(30)}`,
+    'keywords: 1~40자로 쓰세요 – ',
+    'keywords: 문자열이 아닌 항목 제거',
+  ]);
+  for (const bad of ['a[b', 'a]b', 'a|b', 'a#b', 'a^b']) {
+    r = check(['AIOps', 'LLM', 'agent', bad]);
+    assert.deepEqual(r.digest.keywords, ['AIOps', 'LLM', 'agent']);
+    assert.deepEqual(r.problems, [`keywords: 쓸 수 없는 문자([ ] | # ^)가 있습니다 – ${bad}`]);
+  }
+  r = check(['AIOps', 'aiops', 'LLM  Agent', 'llm agent', 'benchmark']);
+  assert.deepEqual(r.digest.keywords, ['AIOps', 'LLM Agent', 'benchmark']);
+  assert.deepEqual(r.problems, ['keywords: 중복 제거 – aiops', 'keywords: 중복 제거 – llm agent']);
 });

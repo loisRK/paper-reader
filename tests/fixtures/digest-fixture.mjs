@@ -20,5 +20,6 @@ export function fullDigest({ paperId = 'p1', evidence = 'p1-s1', cards = 12 } = 
       ...(section === 'results' ? { bigNumbers: [{ value: '1%', label: 'x', evidence: [evidence] }] } : {}),
     })),
     glossary: [],
+    keywords: ['AIOps', 'LLM agent', 'benchmark'],
   };
 }

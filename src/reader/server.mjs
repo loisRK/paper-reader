@@ -81,10 +81,11 @@ function validated(bundle) {
   if (bundle.rawDigest === null) {
     const problems = bundle.digestError ? [`digest.json을 읽을 수 없습니다: ${bundle.digestError}`] : [];
     return bundle.digestError
-      ? { digest: validateDigest(null, bundle.source).digest, problems }
+      ? { digest: validateDigest(null, bundle.source, { requireKeywords: false }).digest, problems }
       : { digest: null, problems };
   }
-  return validateDigest(bundle.rawDigest, bundle.source);
+  // Digests written before keywords existed still open without a warning banner.
+  return validateDigest(bundle.rawDigest, bundle.source, { requireKeywords: false });
 }
 
 async function serveStatic(res, pathname) {

@@ -10,6 +10,16 @@ const MIN_CARDS_SHORT = 8;
 const SHORT_PAPER_PAGES = 6;
 const CLAIM_MAX = 100;
 const EXPLAIN_MIN_SENTENCES = 2;
+// Keywords become Obsidian wiki links ([[term]]) in the summary note (prompts/digest.md 9절).
+const KEYWORDS_MIN = 3;
+const KEYWORDS_MAX = 6;
+const KEYWORD_MAX_LEN = 40;
+const KEYWORD_FORBIDDEN = /[[\]|#^]/u;
+
+/** Trims and collapses inner whitespace; the form used for display and for duplicate checks. */
+export function normalizeKeyword(term) {
+  return typeof term === 'string' ? term.normalize('NFC').replace(/\s+/gu, ' ').trim() : '';
+}
 
 /** Minimum number of cards for this paper: 8 for short papers (≤ 6 pages), else 12. */
 export function minCards(source) {
@@ -31,9 +41,11 @@ const str = (v) => (typeof v === 'string' ? v : '');
 const strList = (v) => (Array.isArray(v) ? v.filter((x) => typeof x === 'string') : []);
 
 // Pure and total: never throws, never mutates `digest`.
-export function validateDigest(digest, source) {
+// `requireKeywords: false` tolerates digests written before keywords existed (reader view);
+// new digests (npm run check, the agent job) must carry them.
+export function validateDigest(digest, source, { requireKeywords = true } = {}) {
   const paperId = source?.id;
-  const empty = { version: 1, paperId, paperKind: 'empirical', takeaway: null, cards: [], glossary: [] };
+  const empty = { version: 1, paperId, paperKind: 'empirical', takeaway: null, cards: [], glossary: [], keywords: [] };
   if (!isObj(digest) || !Array.isArray(digest.cards)) {
     return { digest: empty, problems: ['digest.json 형식이 올바르지 않습니다'] };
   }
@@ -150,12 +162,14 @@ export function validateDigest(digest, source) {
   });
 
   problems.push(...coverageProblems(cards, source, paperKind));
+  const kw = checkKeywords(digest.keywords, requireKeywords);
+  problems.push(...kw.problems);
 
   const glossary = (Array.isArray(digest.glossary) ? digest.glossary : [])
     .filter(isObj)
     .map((g) => ({ term: str(g.term), definition: str(g.definition) }));
 
-  return { digest: { version: 1, paperId, paperKind, takeaway, cards, glossary }, problems };
+  return { digest: { version: 1, paperId, paperKind, takeaway, cards, glossary, keywords: kw.keywords }, problems };
 }
 
 // Whole-paper checks, reported after the per-card problems.
@@ -175,4 +189,41 @@ function coverageProblems(cards, source, paperKind) {
     problems.push('결과 카드에 숫자(bigNumbers)나 표(tables)가 없습니다');
   }
   return problems;
+}
+
+function checkKeywords(raw, required) {
+  if (raw === undefined) {
+    return { keywords: [], problems: required ? [`keywords: 없음 – 논문의 핵심 용어 ${KEYWORDS_MIN}~${KEYWORDS_MAX}개를 쓰세요`] : [] };
+  }
+  if (!Array.isArray(raw)) return { keywords: [], problems: ['keywords: 문자열 배열이어야 합니다'] };
+  const problems = [];
+  const keywords = [];
+  const seen = new Set();
+  for (const k of raw) {
+    if (typeof k !== 'string') {
+      problems.push('keywords: 문자열이 아닌 항목 제거');
+      continue;
+    }
+    const term = normalizeKeyword(k);
+    const len = [...term].length;
+    if (len < 1 || len > KEYWORD_MAX_LEN) {
+      problems.push(`keywords: 1~${KEYWORD_MAX_LEN}자로 쓰세요 – ${[...term].slice(0, 30).join('')}`);
+      continue;
+    }
+    if (KEYWORD_FORBIDDEN.test(term)) {
+      problems.push(`keywords: 쓸 수 없는 문자([ ] | # ^)가 있습니다 – ${term.slice(0, 30)}`);
+      continue;
+    }
+    const key = term.toLowerCase();
+    if (seen.has(key)) {
+      problems.push(`keywords: 중복 제거 – ${term.slice(0, 30)}`);
+      continue;
+    }
+    seen.add(key);
+    keywords.push(term);
+  }
+  if (keywords.length < KEYWORDS_MIN || keywords.length > KEYWORDS_MAX) {
+    problems.push(`keywords: ${keywords.length}개입니다 – ${KEYWORDS_MIN}~${KEYWORDS_MAX}개를 쓰세요`);
+  }
+  return { keywords: keywords.slice(0, KEYWORDS_MAX), problems };
 }

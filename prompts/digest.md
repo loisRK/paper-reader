@@ -28,7 +28,8 @@
     "tables": [{ "title": "Table 3 재구성", "columns": ["Agent", "Acc."], "rows": [["A", "49%"]], "evidence": ["p8-s6"], "note": "" }],
     "figures": [{ "label": "Figure 2", "page": 4, "note": "" }]
   }],
-  "glossary": [{ "term": "", "definition": "" }]
+  "glossary": [{ "term": "", "definition": "" }],
+  "keywords": ["", "", ""]
 }
 ```
 
@@ -90,7 +91,7 @@
 
 ## 7. 문장 길이
 
-`npm run check`가 검사하는 것: `takeaway` 유무, evidence(claim·bigNumbers·tables·takeaway), 표 형식, 카드 `id` 중복, `section` 값, `figures[].page` 범위, opinion 항목, 카드 수(12장, 6쪽 이하 논문은 8장 이상), 빠진 섹션, `paperKind` 값, 결과 카드의 숫자·표(empirical만), 카드 id `takeaway` 금지, `explain` 문장 수, claim 길이. 아래 길이 규칙 중 "검사:"가 붙은 것만 검사하고 나머지는 권고다.
+`npm run check`가 검사하는 것: `takeaway` 유무, evidence(claim·bigNumbers·tables·takeaway), 표 형식, 카드 `id` 중복, `section` 값, `figures[].page` 범위, opinion 항목, 카드 수(12장, 6쪽 이하 논문은 8장 이상), 빠진 섹션, `paperKind` 값, 결과 카드의 숫자·표(empirical만), 카드 id `takeaway` 금지, `explain` 문장 수, claim 길이, `keywords`(3~6개·1~40자·금지 문자·중복). 아래 길이 규칙 중 "검사:"가 붙은 것만 검사하고 나머지는 권고다.
 
 - `answer`: 120자 이내. 3분 모드에서는 질문과 answer만 보이므로 answer만 읽어도 흐름이 이어지게 쓴다.
 - `explain`: 2~4문장(검사: 2문장 미만이면 문제). 문장은 `.`·`!`·`?`(예: "…이다.")로 끝맺는다.
@@ -104,9 +105,17 @@
 - 그림·표는 `figures`에 넣는다. `page`는 `source.json`의 `figures`에 있는 page를 쓴다(1 ~ 총 페이지 수). 정수여야 한다(`figures.txt`의 `p.4`면 `4`).
 - `figures[].label`은 `source.json`의 `figures[].label`을 그대로 쓴다(예: "Figure 2", "Table 1").
 
-## 9. 용어집
+## 9. 용어집과 키워드
 
 - `glossary`에는 처음 나오는 전문 용어 5~12개를 넣는다. 정의는 40자 이내, 용어는 영문을 병기한다.
+
+### 키워드(`keywords`)
+
+- `keywords`에는 이 논문의 **핵심 용어 3~6개**를 문자열로 넣는다. Obsidian 요약 노트에서 `[[키워드]]` 링크가 되어, 같은 키워드를 쓴 논문이 한곳에 모여 보이게 한다.
+- 논문에 **실제로 나오는 용어**만 쓴다. 영어 원어 그대로 쓰거나 논문에 쓰인 표기를 그대로 쓴다(예: `log anomaly detection`, `AIOps`). 번역하거나 새로 만든 말은 쓰지 않는다.
+- 용어집(`glossary`)에 있는 용어면 그 용어(영문 원어)를 우선한다.
+- 일반어(method, results, model, system, performance, experiment 등)는 쓰지 않는다.
+- 각 1~40자, `[` `]` `|` `#` `^` 문자는 쓸 수 없다. 대소문자만 다른 같은 용어를 두 번 넣지 않는다(검사: 개수·길이·금지 문자·중복).
 
 ## 10. 마무리
 
