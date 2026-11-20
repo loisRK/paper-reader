@@ -36,6 +36,13 @@ function cleanProfiles(v) {
   return Object.keys(out).length ? out : undefined;
 }
 
+// obsidian: { vault, folder, researchNote } — validated by src/obsidian/settings.mjs before saving.
+function cleanObsidian(v) {
+  if (!isObj(v) || typeof v.vault !== 'string' || !v.vault || typeof v.folder !== 'string') return undefined;
+  if (v.researchNote !== null && v.researchNote !== undefined && typeof v.researchNote !== 'string') return undefined;
+  return { vault: v.vault, folder: v.folder, researchNote: v.researchNote || null };
+}
+
 export async function readSettings(dataDir) {
   try {
     const v = JSON.parse(await fs.readFile(settingsFile(dataDir), 'utf8'));
@@ -46,6 +53,8 @@ export async function readSettings(dataDir) {
     if (agentProfile) out.agentProfile = agentProfile;
     const lastModels = cleanLastModels(v?.lastModels);
     if (lastModels) out.lastModels = lastModels;
+    const obsidian = cleanObsidian(v?.obsidian);
+    if (obsidian) out.obsidian = obsidian;
     return out;
   } catch {
     return { folders: [] };
@@ -112,7 +121,7 @@ export function writeSettings(dataDir, changes = {}) {
   return serialized(dataDir, () => writeSettingsNow(dataDir, changes));
 }
 
-async function writeSettingsNow(dataDir, { folders, agent, agentProfile } = {}) {
+async function writeSettingsNow(dataDir, { folders, agent, agentProfile, obsidian } = {}) {
   const saved = await readSettings(dataDir);
   const next = { folders: folders === undefined ? saved.folders : await validateFolders(folders, saved.folders) };
   if (agent !== undefined) {
@@ -126,5 +135,10 @@ async function writeSettingsNow(dataDir, { folders, agent, agentProfile } = {}) 
     next.agentProfile = { ...(saved.agentProfile ?? {}), ...agentProfile };
   } else if (saved.agentProfile) next.agentProfile = saved.agentProfile;
   if (saved.lastModels) next.lastModels = saved.lastModels;
+  if (obsidian !== undefined) {
+    const clean = cleanObsidian(obsidian);
+    if (!clean) throw new SettingsError('Obsidian 설정 형식이 올바르지 않습니다.');
+    next.obsidian = clean;
+  } else if (saved.obsidian) next.obsidian = saved.obsidian;
   await writeAtomic(dataDir, next);
 }

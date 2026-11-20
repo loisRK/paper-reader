@@ -1036,3 +1036,89 @@ test('agents API: Claude accounts (aliases) with email and model, chosen account
   // switching back to the default account: the run gets no config dir (CLAUDE_CONFIG_DIR removed)
   assert.equal((await pj({ agent: 'claude', profile: 'claude' })).status, 200);
 });
+
+// ---- Obsidian companion notes API ----
+test('obsidian API: settings validation, note list, export to the vault (never outside)', async (t) => {
+  const tmp = await fs.realpath(await fs.mkdtemp(path.join(os.tmpdir(), 'pr-obs-')));
+  const dataDir = path.join(tmp, 'data');
+  const out = path.join(tmp, 'out');
+  const ex = path.join(tmp, 'examples');
+  const vault = path.join(tmp, 'vault');
+  await fs.mkdir(path.join(vault, 'Notes'), { recursive: true });
+  await fs.mkdir(path.join(vault, '.obsidian'), { recursive: true });
+  await fs.writeFile(path.join(vault, 'Notes', '연구 주제.md'), '# 연구 주제\n## 축 A\n');
+  await fs.writeFile(path.join(vault, '.obsidian', 'x.md'), '');
+  await fs.mkdir(path.join(out, 'z1'), { recursive: true });
+  await fs.mkdir(path.join(out, 'f1'), { recursive: true });
+  await fs.mkdir(path.join(ex, 'e1'), { recursive: true });
+  await fs.writeFile(path.join(out, 'z1', 'source.json'), JSON.stringify({ ...source, id: 'z1' }));
+  await fs.writeFile(path.join(out, 'z1', 'digest.json'), JSON.stringify(fullDigest({ paperId: 'z1' })));
+  await fs.writeFile(path.join(out, 'z1', 'notes.json'), JSON.stringify({ highlights: [{ id: 'h1', sentenceIds: ['p1-s2'], color: '#ff6666', comment: '중요' }], cardMemos: { c1: '메모' } }));
+  await fs.writeFile(path.join(out, 'z1', 'connections.json'), JSON.stringify({ version: 1, items: [{ id: 'k1', target: '축 A', text: '연결.', evidence: ['p1-s1'] }] }));
+  await fs.writeFile(path.join(out, 'f1', 'source.json'), JSON.stringify({ ...source, id: 'f1', zotero: undefined }));
+  await fs.writeFile(path.join(ex, 'e1', 'source.json'), JSON.stringify({ ...source, id: 'e1', zotero: undefined }));
+  await fs.writeFile(path.join(ex, 'e1', 'digest.json'), JSON.stringify(fullDigest({ paperId: 'e1' })));
+  const s = createServer({ outputDir: out, dataDir, reader: { port: 0 }, zotero: { baseUrl: 'http://127.0.0.1:1' } }, { examplesDir: ex });
+  await new Promise((r) => s.listen(0, '127.0.0.1', r));
+  t.after(async () => { s.close(); await fs.rm(tmp, { recursive: true, force: true }); });
+  const b = `http://127.0.0.1:${s.address().port}`;
+  const send = (method, p, body, headers = { 'content-type': 'application/json' }) => fetch(b + p, { method, headers, body: JSON.stringify(body) });
+
+  // nothing set yet
+  assert.deepEqual(await (await fetch(`${b}/api/obsidian/settings`)).json(), { vault: '', folder: 'Notes/Papers', researchNote: null, vaultOk: false });
+  const unset = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(unset.status, 400);
+  assert.equal((await unset.json()).error, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
+  assert.equal((await fetch(`${b}/api/obsidian/notes`)).status, 400);
+
+  // PUT validation + 415 guard
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault }, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: '../x' })).status, 400);
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, researchNote: 'Notes/없음.md' })).status, 400);
+  const ok = await send('PUT', '/api/obsidian/settings', { vault, folder: 'Notes/Papers', researchNote: 'Notes/연구 주제.md' });
+  assert.equal(ok.status, 200);
+  assert.deepEqual(await ok.json(), { vault, folder: 'Notes/Papers', researchNote: 'Notes/연구 주제.md', vaultOk: true });
+
+  assert.deepEqual(await (await fetch(`${b}/api/obsidian/notes`)).json(), { notes: ['Notes/연구 주제.md'], truncated: false });
+
+  // export: Zotero paper
+  assert.equal((await send('POST', '/api/papers/z1/obsidian', {}, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await fetch(`${b}/api/papers/z1/obsidian`)).status, 404);
+  const r = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(r.status, 200);
+  const { relPath } = await r.json();
+  assert.equal(relPath, 'Notes/Papers/@z1 읽기 노트.md');
+  const file = path.join(vault, relPath);
+  const text = await fs.readFile(file, 'utf8');
+  assert.ok(text.includes('[[@z1]]'));
+  assert.ok(text.includes('> [!paper-red] 🔴 멈춰서 생각 · p.1\n> b\n>\n> **내 메모:** 중요'));
+  assert.ok(text.includes('연결 대상: [[연구 주제#축 A]]'));
+  assert.ok(text.endsWith('## 내 생각\n\n'));
+  // re-send keeps the user section
+  await fs.writeFile(file, `${text}내 글\n`);
+  assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
+  assert.ok((await fs.readFile(file, 'utf8')).endsWith('## 내 생각\n\n내 글\n'));
+  // broken markers → 409, file untouched
+  await fs.writeFile(file, 'broken');
+  const broken = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(broken.status, 409);
+  assert.match((await broken.json()).error, /paper-reader 표시가 깨져/);
+  assert.equal(await fs.readFile(file, 'utf8'), 'broken');
+
+  // folder paper without Zotero and without digest; example paper
+  assert.equal((await (await send('POST', '/api/papers/f1/obsidian', {})).json()).relPath, 'Notes/Papers/f1 읽기 노트.md');
+  const f1 = await fs.readFile(path.join(vault, 'Notes/Papers/f1 읽기 노트.md'), 'utf8');
+  assert.ok(!f1.includes('[[@') && f1.includes('요약이 아직 없습니다.'));
+  assert.equal((await send('POST', '/api/papers/e1/obsidian', {})).status, 200);
+  assert.equal((await send('POST', '/api/papers/nope/obsidian', {})).status, 404);
+
+  // vault gone → 400 without leaking the absolute path; other settings kept
+  await fs.rename(vault, `${vault}-moved`);
+  const gone = await send('POST', '/api/papers/z1/obsidian', {});
+  assert.equal(gone.status, 400);
+  assert.ok(!(await gone.text()).includes(tmp));
+  assert.equal((await (await fetch(`${b}/api/obsidian/settings`)).json()).vaultOk, false);
+  // folders PUT keeps the obsidian settings
+  assert.equal((await send('PUT', '/api/library/folders', { folders: [] })).status, 200);
+  assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'settings.json'), 'utf8')).obsidian.vault, vault);
+});

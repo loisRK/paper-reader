@@ -15,6 +15,10 @@ import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
 import { createDigestJobs } from '../agent/digest-job.mjs';
+import { readNotes } from '../notes/store.mjs';
+import { buildCompanionNote, companionFileName, researchHeadings } from '../obsidian/note.mjs';
+import { writeCompanionNote, listVaultNotes, readVaultNote, resolveVault } from '../obsidian/write.mjs';
+import { validateObsidianSettings, DEFAULT_FOLDER } from '../obsidian/settings.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -265,6 +269,49 @@ export function createServer(cfg, deps = {}) {
       }
     })().finally(() => { linking = false; });
   }
+  // Obsidian: errors from src/obsidian carry { status, message } without the vault's absolute path.
+  const obsidianCall = async (fn) => {
+    try {
+      return await fn();
+    } catch (err) {
+      if (err.status) throw new HttpError(err.status, err.message);
+      throw new HttpError(500, 'Obsidian 작업 중 오류가 났습니다.');
+    }
+  };
+  async function obsidianView() {
+    const o = (await savedSettings()).obsidian;
+    let vaultOk = false;
+    if (o?.vault) { try { await resolveVault(o.vault); vaultOk = true; } catch { vaultOk = false; } }
+    return { vault: o?.vault ?? '', folder: o?.folder ?? DEFAULT_FOLDER, researchNote: o?.researchNote ?? null, vaultOk };
+  }
+  async function readConnections(id) {
+    try {
+      const c = JSON.parse(await fs.readFile(path.join(out, id, 'connections.json'), 'utf8'));
+      return c && typeof c === 'object' && Array.isArray(c.items) ? c : null;
+    } catch {
+      return null;
+    }
+  }
+  async function exportToObsidian(id) {
+    const o = (await savedSettings()).obsidian;
+    if (!o?.vault) throw new HttpError(400, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
+    const b = await readPaper(out, id, opts);
+    if (!b) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+    const digest = b.rawDigest === null ? null : validated(b).digest;
+    const notes = b.example ? null : await readNotes(out, id).catch(() => null);
+    const connections = digest ? await readConnections(id) : null;
+    let headings = null;
+    let researchNoteName = null;
+    if (o.researchNote) {
+      researchNoteName = path.posix.basename(o.researchNote).replace(/\.md$/i, '');
+      try { headings = researchHeadings(await readVaultNote(o.vault, o.researchNote)); } catch { headings = []; }
+    }
+    const citekey = b.source.zotero?.itemKey ? b.source.id : null;
+    const managed = buildCompanionNote({
+      source: b.source, digest, notes, connections, researchNoteName, citekey, now: new Date(), researchHeadings: headings,
+    });
+    return obsidianCall(() => writeCompanionNote({ vault: o.vault, folder: o.folder, fileName: companionFileName(b.source), managed }));
+  }
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
   async function route(req, res) {
@@ -302,6 +349,31 @@ export function createServer(cfg, deps = {}) {
       }
       await writeSettings(dataDir, { agent: body.agent, ...(agentProfile ? { agentProfile } : {}) });
       return sendJson(res, 200, { agents: await withModels(agents), selected: body.agent });
+    }
+
+    if (parts[1] === 'obsidian' && parts.length === 3 && (parts[2] === 'settings' || parts[2] === 'notes')) {
+      if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
+      if (parts[2] === 'notes') {
+        if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
+        const o = (await readSettings(dataDir)).obsidian;
+        if (!o?.vault) throw new HttpError(400, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
+        return sendJson(res, 200, await obsidianCall(() => listVaultNotes(o.vault)));
+      }
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        const obsidian = await obsidianCall(() => validateObsidianSettings(body ?? {}));
+        await writeSettings(dataDir, { obsidian });
+      } else if (method !== 'GET') {
+        throw new HttpError(405, '허용되지 않는 메서드입니다.');
+      }
+      return sendJson(res, 200, await obsidianView());
+    }
+
+    if (parts[1] === 'papers' && parts.length === 4 && parts[3] === 'obsidian' && method === 'POST') {
+      const id = checkName(parts[2], 'id');
+      await readBody(req);
+      if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
+      return sendJson(res, 200, await exportToObsidian(id));
     }
 
     if (parts[1] === 'library' && parts[2] === 'folders' && parts.length === 3) {
