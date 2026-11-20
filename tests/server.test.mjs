@@ -872,7 +872,7 @@ test('digest API: no available tool → 400 with install hint', async (t) => {
   const ctx = await digestServer(t, { agents: [{ id: 'claude', name: 'Claude Code', available: false }, { id: 'codex', name: 'Codex', available: false }] });
   const r = await ctx.jpost('/api/papers/d1/digest');
   assert.equal(r.status, 400);
-  assert.equal((await r.json()).error, '쓸 수 있는 AI 도구가 없습니다. Claude Code, Codex, Gemini CLI 중 하나를 설치하고 로그인하세요.');
+  assert.equal((await r.json()).error, '쓸 수 있는 AI 도구가 없습니다. Claude Code 또는 Codex 중 하나를 설치하고 로그인하세요.');
 });
 
 test('digest API: folder PDF is extracted first and shares the extraction busy flag', async (t) => {

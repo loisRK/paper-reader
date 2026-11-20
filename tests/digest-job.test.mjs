@@ -263,7 +263,7 @@ test('start errors: 409 while running, 404 unknown, 400 example, 400 no tool', a
   await assert.rejects(c.jobs.start('ex1'), (e) => e.status === 400 && e.message === '예제 논문은 요약을 다시 만들 수 없습니다.');
   assert.equal(c.jobs.get('ghost'), null);
   const none = await setup(t, { runs: [], agent: null });
-  await assert.rejects(none.jobs.start('p1'), (e) => e.status === 400 && e.message === '쓸 수 있는 AI 도구가 없습니다. Claude Code, Codex, Gemini CLI 중 하나를 설치하고 로그인하세요.');
+  await assert.rejects(none.jobs.start('p1'), (e) => e.status === 400 && e.message === '쓸 수 있는 AI 도구가 없습니다. Claude Code 또는 Codex 중 하나를 설치하고 로그인하세요.');
   // a finished job stays queryable; failed start does not replace it
   assert.equal(c.jobs.get('p1').state, 'done');
 });
@@ -295,6 +295,13 @@ test('log keeps the last 20 lines, each at most 200 chars; job snapshot is a cop
   j.log.push('y');
   assert.equal(c.jobs.get('p1').state, 'done');
   assert.equal(c.jobs.get('p1').log.length, 20);
+});
+
+test('redactPaths also redacts file:// URLs down to the file name', () => {
+  assert.equal(redactPaths('at file:///opt/homebrew/Cellar/codex/0.170/lib/chunk.js:307474:11'), 'at chunk.js:307474:11');
+  assert.equal(redactPaths('(file:///Users/me/My%20Papers/a.pdf)'), '(a.pdf)');
+  assert.equal(redactPaths('file:///tmp/x/ and "file:///Users/me/y.mjs"'), 'x and "y.mjs"');
+  assert.equal(redactPaths('https://example.com/a/b.js:1:2'), 'https://example.com/a/b.js:1:2');
 });
 
 test('redactPaths replaces absolute and ~ paths with their basename, keeps other text', () => {
@@ -367,12 +374,12 @@ test('cancel during an extraction that then fails ends cancelled, not failed', a
 test('the model a run reports is recorded (even when the attempt fails), never the job state', async (t) => {
   const runs = [];
   const recorded = [];
-  const c = await setup(t, { runs, agent: 'gemini', recordModel: async (r) => { recorded.push(r); } });
-  runs.push(async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(GOOD)); return { code: 0, signal: null, timedOut: false, model: 'gemini-2.5-pro' }; });
+  const c = await setup(t, { runs, agent: 'codex', recordModel: async (r) => { recorded.push(r); } });
+  runs.push(async (w) => { await fs.writeFile(path.join(w, 'digest.json'), JSON.stringify(GOOD)); return { code: 0, signal: null, timedOut: false, model: 'gpt-5-codex' }; });
   await c.jobs.start('p1');
   await settled(c.jobs, 'p1');
   assert.equal(c.jobs.get('p1').state, 'done');
-  assert.deepEqual(recorded, [{ agent: 'gemini', model: 'gemini-2.5-pro' }]);
+  assert.deepEqual(recorded, [{ agent: 'codex', model: 'gpt-5-codex' }]);
 
   const runs2 = [];
   const rec2 = [];

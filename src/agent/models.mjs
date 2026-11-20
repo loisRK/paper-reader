@@ -37,9 +37,6 @@ export async function configuredModel(id, { home = os.homedir(), env = process.e
       ?? cleanModel((await readJson(readFile, path.join(claudeDir ?? path.join(home, '.claude'), 'settings.json')))?.model);
   } else if (id === 'codex') {
     try { model = parseCodexModel(await readFile(path.join(home, '.codex', 'config.toml'), 'utf8')); } catch { model = null; }
-  } else if (id === 'gemini') {
-    const s = await readJson(readFile, path.join(home, '.gemini', 'settings.json'));
-    model = cleanModel(s?.model?.name) ?? cleanModel(s?.model);
   }
   return model ?? DEFAULT_MODEL_TEXT;
 }

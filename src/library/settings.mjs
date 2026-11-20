@@ -3,7 +3,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 
 export const MAX_FOLDERS = 10;
-export const AGENT_IDS = ['claude', 'codex', 'gemini'];
+export const AGENT_IDS = ['claude', 'codex'];
 
 export class SettingsError extends Error {
   constructor(message) {

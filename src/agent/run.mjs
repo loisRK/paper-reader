@@ -2,7 +2,7 @@ import fs from 'node:fs';
 import fsp from 'node:fs/promises';
 import os from 'node:os';
 import path from 'node:path';
-import { spawn } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
 import { agentCommand } from './commands.mjs';
 import { paperText, figuresText } from './paper-text.mjs';
 import { cleanModel } from './models.mjs';
@@ -18,6 +18,14 @@ ${pages ? `쪽 수: ${pages} (참고문헌만 있는 쪽은 \`paper.txt\`에 표
 `;
 
 const LOG_MAX = 200;
+
+/** Names of the MCP servers the user's config.toml defines (plugin servers are off via features.plugins=false). Throws if it cannot tell. */
+export function listCodexMcpServers() {
+  const out = execFileSync('codex', ['-c', 'features.plugins=false', '-c', 'features.apps=false', 'mcp', 'list', '--json'], { encoding: 'utf8', timeout: 15_000, stdio: ['ignore', 'pipe', 'ignore'], maxBuffer: 1 << 20 });
+  const list = JSON.parse(out);
+  if (!Array.isArray(list)) throw new Error('unexpected mcp list');
+  return list.map((x) => String(x.name));
+}
 
 function inside(parent, child) {
   const rel = path.relative(parent, child);
@@ -82,32 +90,9 @@ export function summarizeStreamLine(line) {
 
 const firstOf = (v) => String(v ?? '').split('\n')[0].trim();
 
-/** One Gemini CLI stream-json line -> short Korean log line, or null. Never includes file contents or model text. */
-export function summarizeGeminiLine(line) {
-  let o;
-  try { o = JSON.parse(line); } catch { return null; }
-  if (!o || typeof o !== 'object') return null;
-  if (o.type === 'tool_use') {
-    const f = o.parameters?.file_path;
-    const base = typeof f === 'string' ? path.basename(f) : '';
-    if ((o.tool_name === 'write_file' || o.tool_name === 'replace') && base) return `파일 쓰기: ${base}`;
-    if (o.tool_name === 'read_file' && base) return `읽기: ${base}`;
-    if (o.tool_name === 'list_directory') return '폴더 보기';
-    return typeof o.tool_name === 'string' ? `도구 요청: ${clip(o.tool_name, 60)}` : null;
-  }
-  if (o.type === 'tool_result') {
-    return o.status === 'error' ? `도구 거부·오류: ${firstOf(o.error?.message)}` : null;
-  }
-  if (o.type === 'result') {
-    return o.status === 'success' ? '완료' : `오류: ${firstOf(o.error?.message ?? o.status)}`;
-  }
-  if (o.type === 'error') return `${o.severity === 'warning' ? '경고' : '오류'}: ${firstOf(o.message)}`;
-  return null;
-}
+const SUMMARIZERS = { claude: summarizeStreamLine };
 
-const SUMMARIZERS = { claude: summarizeStreamLine, gemini: summarizeGeminiLine };
-
-/** The model a run reports at start: Claude/Gemini stream-json init event, Codex's `model: …` header line. */
+/** The model a run reports at start: Claude stream-json init event, Codex's `model: …` header line. */
 function modelFrom(id, line) {
   if (id === 'codex') {
     const m = /^model:\s*(\S+)\s*$/.exec(line.trim());
@@ -116,11 +101,10 @@ function modelFrom(id, line) {
   let o;
   try { o = JSON.parse(line); } catch { return null; }
   if (id === 'claude' && o?.type === 'system' && o.subtype === 'init') return cleanModel(o.model);
-  if (id === 'gemini' && o?.type === 'init') return cleanModel(o.model);
   return null;
 }
 
-const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|set an auth method|GEMINI_API_KEY|UNAUTHENTICATED|failed to authenticate|auth login|reached its time limit|setup-token/i;
+const LOGIN_RE = /not logged in|\/login|invalid api key|login required|authentication_error|please log in|UNAUTHENTICATED|failed to authenticate|auth login|reached its time limit|setup-token/i;
 const LABEL_RE = /^[A-Za-z0-9_.-]{1,64}$/;
 const LIMIT_RE = /usage limit|rate limit|quota|too many requests|\b429\b|limit reached|RESOURCE_EXHAUSTED/i;
 
@@ -138,12 +122,12 @@ const SPAWN_FAIL = 'AI 도구를 실행할 수 없습니다. 설치되어 있는
 
 export function runAgent({
   id, workdir, prompt, configDir, label, timeoutMs = 20 * 60 * 1000, graceMs = 5000, closeWaitMs = 2000,
-  spawnImpl = spawn, killImpl = process.kill, onLog = () => {},
+  spawnImpl = spawn, listMcpServers = listCodexMcpServers, killImpl = process.kill, onLog = () => {},
 }) {
   const failed = (hint) => ({ done: Promise.resolve({ code: null, signal: null, timedOut: false, errorHint: hint }), cancel() {} });
   let child;
   try {
-    const { cmd, args, files, env } = agentCommand(id, { workdir, prompt, configDir });
+    const { cmd, args, files, env } = agentCommand(id, { workdir, prompt, configDir, mcpServers: id === 'codex' ? listMcpServers() : [] });
     for (const [rel, content] of Object.entries(files)) {
       const file = path.join(workdir, rel);
       fs.mkdirSync(path.dirname(file), { recursive: true });

@@ -83,11 +83,10 @@ cp paper-reader.config.example.json paper-reader.config.json
 
 | 도구 | 감지 | 실행 방식과 막힌 것 |
 |---|---|---|
-| Claude Code | `claude --version` | `--permission-mode dontAsk`, 허용 도구 Read·Write·Edit·Glob·Grep만. Bash·WebFetch·WebSearch 금지, 작업 폴더 밖 쓰기 금지, 홈 폴더 읽기 금지. |
-| Codex | `codex --version` | `codex exec --sandbox workspace-write`, 네트워크 끔, 쓰기는 작업 폴더만. |
-| Gemini CLI | `gemini --version` (0.46 이상 1.0 미만만) | `gemini -p … --approval-mode auto_edit --policy <작업 폴더 정책>`. 정책 파일이 모든 도구를 막고, 작업 폴더의 입력 파일 읽기와 `digest.json` 쓰기만 허용합니다. 셸(`run_shell_command`)·웹(`web_fetch`, `google_web_search`)·MCP·확장·훅 금지. 범위 밖 버전은 `안전하게 실행할 수 없는 버전입니다`로 표시되고 쓸 수 없습니다. |
+| Claude Code | `claude --version` | `--permission-mode dontAsk`, 허용 도구 Read·Write·Edit·Glob·Grep만. Bash·WebFetch·WebSearch 금지, 작업 폴더 밖 쓰기 금지, 홈 폴더 읽기 금지(우리가 넣은 규칙). MCP 서버 끔(`--strict-mcp-config`). |
+| Codex | `codex --version` | `codex exec --sandbox workspace-write`, 네트워크 끔, 쓰기는 작업 폴더만. 샌드박스는 작업 폴더 밖 쓰기와 네트워크를 막지만 **컴퓨터의 파일 읽기는 막지 않습니다**(Claude Code는 우리 규칙으로 홈 폴더 읽기를 막음). MCP 서버는 실행 때마다 `codex mcp list`로 이름을 읽어 `-c mcp_servers.<이름>.enabled=false`로 모두 끄고 플러그인·앱(`features.plugins`, `features.apps`)도 끕니다. 그 밖의 사용자 설정(모델 등)은 그대로 씁니다. |
 
-도구 칸 아래에는 **설정된 모델**(각 도구의 설정 파일 `~/.claude/settings.json`의 `model`(또는 `ANTHROPIC_MODEL`), `~/.codex/config.toml`의 `model`, `~/.gemini/settings.json`의 `model.name`을 읽기만 함, 없으면 `기본값 (계정 플랜에 따라 정해짐)`)과 **최근 실행**(마지막 실행 때 도구가 알려 준 모델과 시각, `data/settings.json`의 `lastModels`)이 표시됩니다.
+도구 칸 아래에는 **설정된 모델**(각 도구의 설정 파일 `~/.claude/settings.json`의 `model`(또는 `ANTHROPIC_MODEL`), `~/.codex/config.toml`의 `model`을 읽기만 함, 없으면 `기본값 (계정 플랜에 따라 정해짐)`)과 **최근 실행**(마지막 실행 때 도구가 알려 준 모델과 시각, `data/settings.json`의 `lastModels`)이 표시됩니다.
 
 **Claude Code 계정**: 셸 설정(`~/.zshrc`, `~/.bashrc`, `~/.zprofile`)에 `alias claude-yvin='CLAUDE_CONFIG_DIR=~/.claude/yvin claude'` 같은 별칭이 있으면, 기본 계정(`claude`)과 함께 **계정** 선택 칸에 `별칭 · 로그인 이메일`로 보입니다(폴더가 있는 별칭만, 이메일은 각 폴더의 `.claude.json`에서 읽기만 함). 고른 계정은 `data/settings.json`의 `agentProfile`에 저장되고, 실행할 때 그 계정의 `CLAUDE_CONFIG_DIR`을 명시적으로 넘깁니다(기본 계정은 이 변수를 지움). 서버를 띄운 셸의 값은 쓰지 않습니다.
 

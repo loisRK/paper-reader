@@ -215,7 +215,7 @@ function agentPicker(actions) {
   const draw = (info) => {
     const agents = info?.agents ?? [];
     if (!agents.some((a) => a.available)) {
-      setChildren(box, el('p', { class: 'folder-note', text: '쓸 수 있는 AI 도구가 없습니다. Claude Code, Codex, Gemini CLI 중 하나를 설치하고 로그인하면 요약을 만들 수 있습니다.' }));
+      setChildren(box, el('p', { class: 'folder-note', text: '쓸 수 있는 AI 도구가 없습니다. Claude Code 또는 Codex 중 하나를 설치하고 로그인하면 요약을 만들 수 있습니다.' }));
       return;
     }
     const select = el('select', { id: 'agent-select', class: 'agent-select', name: 'agent' },
