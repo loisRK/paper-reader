@@ -289,6 +289,10 @@ test('listVaultNotes lists .md files, skipping hidden folders and symlinks', asy
   await fs.symlink(root, path.join(vault, 'loop'));
   assert.deepEqual(await listVaultNotes(vault), { notes: ['Notes/b.md', 'Notes/Sub/a.md', 'top.md'], truncated: false });
   assert.deepEqual(await listVaultNotes(vault, { max: 2 }), { notes: ['Notes/b.md', 'Notes/Sub/a.md'], truncated: true });
+  // the companion-note folder is left out, and the cap applies after that
+  assert.deepEqual(await listVaultNotes(vault, { exclude: 'Notes/Sub' }), { notes: ['Notes/b.md', 'top.md'], truncated: false });
+  assert.deepEqual(await listVaultNotes(vault, { exclude: 'Notes/Sub', max: 2 }), { notes: ['Notes/b.md', 'top.md'], truncated: false });
+  assert.deepEqual(await listVaultNotes(vault, { exclude: 'Notes', max: 1 }), { notes: ['top.md'], truncated: false });
   await fs.rm(root, { recursive: true, force: true });
 });
 

@@ -1,7 +1,7 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { obsidianReady, noteOptions, exportMessage } from '../src/reader/public/views/obsidian.js';
-import { connectionsView, CONN_EMPTY_TEXT } from '../src/reader/public/views/connections.js';
+import { connectionsView, CONN_EMPTY_TEXT, jobUpdateMode } from '../src/reader/public/views/connections.js';
 import { jobView } from '../src/reader/public/views/digest.js';
 
 const SET = { vault: '/v', folder: 'Notes/Papers', researchNote: 'Notes/연구.md', vaultOk: true };
@@ -130,4 +130,24 @@ test('connectionsView: memo made from another research note is flagged', () => {
 test('connectionsView: malformed items are skipped', () => {
   const v = connectionsView({ settings: SET, connections: { items: [null, { id: 'k1', text: 't' }, 5] }, job: null, hasDigest: true });
   assert.deepEqual(v.items, [{ id: 'k1', target: '', text: 't', evidence: [], edited: false }]);
+});
+
+test('obsidianReady: a failed settings read says so (not "vault missing")', () => {
+  const r = obsidianReady({ loadError: true });
+  assert.equal(r.export, false);
+  assert.equal(r.connections, false);
+  assert.equal(r.exportHint, 'Obsidian 설정을 읽지 못했습니다.');
+  assert.equal(r.connectionsHint, 'Obsidian 설정을 읽지 못했습니다.');
+});
+
+test('jobUpdateMode: polls of the same running job patch in place; transitions re-render', () => {
+  const run = (state, id = 'j1') => ({ id, kind: 'connections', state, attempt: 1, maxAttempts: 2, log: [] });
+  assert.equal(jobUpdateMode(run('writing'), run('writing')), 'patch');
+  assert.equal(jobUpdateMode(run('writing'), run('checking')), 'patch');
+  assert.equal(jobUpdateMode(run('checking'), run('retrying')), 'patch');
+  assert.equal(jobUpdateMode(null, run('writing')), 'full');
+  assert.equal(jobUpdateMode(run('writing'), run('done')), 'full');
+  assert.equal(jobUpdateMode(run('done'), run('done')), 'full');
+  assert.equal(jobUpdateMode(run('writing', 'j1'), run('writing', 'j2')), 'full');
+  assert.equal(jobUpdateMode(run('writing'), null), 'full');
 });

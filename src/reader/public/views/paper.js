@@ -717,8 +717,8 @@ export function render(container, data, actions) {
       conn?.setSettings(s);
     }, () => {
       if (disposed) return;
-      exporter?.setSettings(null);
-      conn?.setSettings(null);
+      exporter?.setSettings({ loadError: true });
+      conn?.setSettings({ loadError: true });
     });
   }
 

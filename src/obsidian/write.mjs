@@ -129,7 +129,8 @@ export async function writeCompanionNote({ vault, folder, fileName, managed }) {
 }
 
 /** Vault-relative `.md` paths (sorted), skipping hidden entries (.obsidian, .trash) and symlinks. */
-export async function listVaultNotes(vault, { max = MAX_NOTES } = {}) {
+// `exclude`: a vault-relative folder (the companion-note folder) left out entirely, before the cap.
+export async function listVaultNotes(vault, { max = MAX_NOTES, exclude = null } = {}) {
   const realVault = await resolveVault(vault);
   const notes = [];
   const queue = [''];
@@ -144,7 +145,7 @@ export async function listVaultNotes(vault, { max = MAX_NOTES } = {}) {
     for (const e of entries) {
       if (e.name.startsWith('.') || e.isSymbolicLink()) continue;
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) queue.push(r);
+      if (e.isDirectory()) { if (r !== exclude) queue.push(r); }
       else if (e.isFile() && /\.md$/i.test(e.name)) notes.push(r);
     }
   }

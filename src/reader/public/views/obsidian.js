@@ -6,6 +6,10 @@ const SETTINGS_PLACE = '목록 화면 왼쪽의 Obsidian 설정';
 
 // Pure: what the Obsidian settings allow. settings = GET /api/obsidian/settings (or null before it loads).
 export function obsidianReady(s) {
+  if (s?.loadError) {
+    const h = 'Obsidian 설정을 읽지 못했습니다.';
+    return { export: false, connections: false, exportHint: h, connectionsHint: h };
+  }
   const vaultSet = Boolean(s?.vault);
   const vault = vaultSet && s.vaultOk === true;
   const note = Boolean(s?.researchNote);

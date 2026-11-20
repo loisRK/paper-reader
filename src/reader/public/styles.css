@@ -578,6 +578,10 @@ a.row-title:hover { color: var(--accent); text-decoration: underline; }
 .conn-item { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .7rem .9rem; display: grid; gap: .35rem; }
 .conn-target { margin: 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
 .conn-target-label { font-weight: 600; }
+.conn-ai {
+  display: inline-block; font-size: .7rem; font-weight: 600; line-height: 1.4; padding: 0 .4rem; margin-right: .1rem;
+  border: 1px solid var(--line); border-radius: 999px; color: var(--muted); background: var(--surface-2); vertical-align: 1px;
+}
 .conn-text { margin: 0; line-height: 1.65; font-size: .97rem; overflow-wrap: anywhere; }
 .conn-edited {
   display: inline-block; margin-left: .45rem; font-size: .72rem; padding: 0 .45rem; border-radius: 999px;

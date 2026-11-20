@@ -1088,6 +1088,8 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.equal(r.status, 200);
   const { relPath } = await r.json();
   assert.equal(relPath, 'Notes/Papers/@z1 읽기 노트.md');
+  // companion notes never show up as research-note candidates
+  assert.deepEqual(await (await fetch(`${b}/api/obsidian/notes`)).json(), { notes: ['Notes/연구 주제.md'], truncated: false });
   const file = path.join(vault, relPath);
   const text = await fs.readFile(file, 'utf8');
   assert.ok(text.includes('[[@z1]]'));

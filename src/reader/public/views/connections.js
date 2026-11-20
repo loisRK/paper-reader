@@ -2,7 +2,7 @@
 // Kept apart from the summary cards (not paper content, not part of reading progress or card focus).
 // Pure helpers are tested in Node; DOM pieces only touch `document` when called.
 import { el, setChildren } from './dom.js';
-import { jobView, watchJob, logDetails } from './digest.js';
+import { jobView, watchJob } from './digest.js';
 import { obsidianReady } from './obsidian.js';
 
 export const CONN_EMPTY_TEXT = '연구 주제 노트와 이어지는 내용을 찾지 못했습니다.';
@@ -45,6 +45,12 @@ export function connectionsView({ settings, connections, job, example = false, h
   };
 }
 
+// Pure: how a polled job reaches the screen. Polls of the same still-running job only patch the
+// status text / log lines in place (keeps focus on 취소 and an opened log); anything else re-renders.
+export function jobUpdateMode(prev, next) {
+  return jobView(prev)?.busy && jobView(next)?.busy && prev.id === next.id ? 'patch' : 'full';
+}
+
 // actions: connections(id), connectionsJob(id) → job|null, startConnections(id), cancelConnections(id),
 //   editConnection(id, itemId, text), deleteConnection(id, itemId), toast(msg).
 // onEvidence(ids) highlights evidence in the source panel. Returns { node, setSettings(s), dispose() }.
@@ -67,6 +73,29 @@ export function setupConnections({ id, actions, example = false, hasDigest = fal
   const node = el('section', { class: 'conn-section', 'aria-labelledby': 'conn-title', hidden: true }, details);
   details.addEventListener('toggle', () => { if (details.open) st.everOpened = true; });
 
+  // Job row pieces are created once and reused, so polling never replaces them.
+  const statusEl = el('span', { class: 'job-status conn-status', role: 'status' });
+  const cancelBtn = el('button', { type: 'button', class: 'btn btn-quiet btn-small', text: '취소' });
+  cancelBtn.addEventListener('click', async () => {
+    cancelBtn.disabled = true;
+    try { await actions.cancelConnections(id); } catch (err) { actions.toast(err.message); cancelBtn.disabled = false; }
+  });
+  const logSummary = el('summary', {});
+  const logList = el('ol', {});
+  const logBox = el('details', { class: 'job-log' }, logSummary, logList);
+  let logKey = null;
+  const setText = (n, t) => { if (n.textContent !== t) n.textContent = t; };
+  function patchJob(job) {
+    const v = jobView(job);
+    setText(statusEl, v?.text ?? '');
+    if (statusEl.dataset.tone !== (v?.tone ?? '')) statusEl.dataset.tone = v?.tone ?? '';
+    const lines = (job?.log ?? []).slice(-20);
+    logBox.hidden = !lines.length;
+    setText(logSummary, `로그 보기 (${lines.length}줄)`);
+    const key = lines.join('\n');
+    if (key !== logKey) { logKey = key; logList.replaceChildren(...lines.map((l) => el('li', { text: l }))); }
+  }
+
   const view = () => connectionsView({ settings: st.settings, connections: st.connections, job: st.job, example, hasDigest });
 
   function itemNode(it, v) {
@@ -75,7 +104,10 @@ export function setupConnections({ id, actions, example = false, hasDigest = fal
     const lock = !v.editable || st.pending;
     const lockTitle = !v.editable ? '연결 메모를 만드는 중에는 고칠 수 없습니다.' : null;
     const parts = [
-      el('p', { class: 'conn-target' }, el('span', { class: 'conn-target-label', text: '연결 대상' }), ' ', el('span', { text: it.target || '(제목 없음)' })),
+      el('p', { class: 'conn-target' },
+        el('span', { class: 'conn-ai', title: 'AI가 쓴 연결점 · 논문 내용 아님' }, 'AI', el('span', { class: 'sr-only', text: '가 쓴 연결점 · 논문 내용 아님.' })),
+        ' ',
+        el('span', { class: 'conn-target-label', text: '연결 대상' }), ' ', el('span', { text: it.target || '(제목 없음)' })),
     ];
     if (editing) {
       const ta = el('textarea', {
@@ -153,18 +185,12 @@ export function setupConnections({ id, actions, example = false, hasDigest = fal
     make.addEventListener('click', start);
     actionsRow.append(make);
     if (v.status) {
-      actionsRow.append(el('span', { class: 'job-status conn-status', role: 'status', dataset: { tone: v.status.tone }, text: v.status.text }));
-      if (v.busy) {
-        const cancel = el('button', { type: 'button', class: 'btn btn-quiet btn-small', text: '취소' });
-        cancel.addEventListener('click', async () => {
-          cancel.disabled = true;
-          try { await actions.cancelConnections(id); } catch (err) { actions.toast(err.message); cancel.disabled = false; }
-        });
-        actionsRow.append(cancel);
-      }
-      const log = logDetails(st.job);
-      if (log) actionsRow.append(log);
+      patchJob(st.job);
+      actionsRow.append(statusEl);
+      if (v.busy) actionsRow.append(cancelBtn);
+      actionsRow.append(logBox);
     }
+    cancelBtn.disabled = false;
 
     setChildren(body,
       v.hint ? el('p', { class: 'conn-hint', text: v.hint }) : null,
@@ -197,6 +223,7 @@ export function setupConnections({ id, actions, example = false, hasDigest = fal
       get: (x) => actions.connectionsJob(x),
       async onUpdate(job) {
         if (disposed || watcher !== w) return;
+        if (jobUpdateMode(st.job, job) === 'patch') { st.job = job; patchJob(job); return; }
         if (jobView(job)?.busy) { st.sawBusy = true; st.job = job; render(); return; }
         // Results from before this page opened are not shown.
         if (st.sawBusy && job) {

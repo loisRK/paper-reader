@@ -375,7 +375,7 @@ export function createServer(cfg, deps = {}) {
         if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
         const o = (await readSettings(dataDir)).obsidian;
         if (!o?.vault) throw new HttpError(400, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
-        return sendJson(res, 200, await obsidianCall(() => listVaultNotes(o.vault)));
+        return sendJson(res, 200, await obsidianCall(() => listVaultNotes(o.vault, { exclude: o.folder || DEFAULT_FOLDER })));
       }
       if (method === 'PUT') {
         const body = await readBody(req);
