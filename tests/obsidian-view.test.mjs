@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { obsidianReady, noteOptions, exportMessage } from '../src/reader/public/views/obsidian.js';
+import { obsidianReady, noteOptions, exportMessage, settingsBody } from '../src/reader/public/views/obsidian.js';
 import { connectionsView, CONN_EMPTY_TEXT, jobUpdateMode } from '../src/reader/public/views/connections.js';
 import { jobView } from '../src/reader/public/views/digest.js';
 
@@ -34,8 +34,19 @@ test('noteOptions: name without .md first, folder after; value is the vault path
   assert.deepEqual(noteOptions(null), []);
 });
 
-test('exportMessage', () => {
-  assert.equal(exportMessage({ relPath: 'Notes/Papers/@k 읽기 노트.md' }), 'Obsidian에 저장했습니다: Notes/Papers/@k 읽기 노트.md');
+test('exportMessage names the paper note and, when written, the summary note', () => {
+  assert.equal(exportMessage({ paperNote: 'Papers/@k.md', summaryNote: 'Summaries/@k 요약.md' }),
+    'Obsidian에 저장했습니다: Papers/@k.md · Summaries/@k 요약.md');
+  assert.equal(exportMessage({ paperNote: 'Papers/f1.md', summaryNote: null }), 'Obsidian에 저장했습니다: Papers/f1.md');
+});
+
+test('settingsBody keeps every folder when one field changes; a new vault clears the research note', () => {
+  const s = { vault: '/v', folder: 'Papers', summaryFolder: 'AI/Sum', researchNote: 'Research/r.md', vaultOk: true };
+  assert.deepEqual(settingsBody(s, { researchNote: null }), { vault: '/v', folder: 'Papers', summaryFolder: 'AI/Sum', researchNote: null });
+  assert.deepEqual(settingsBody(s, { vault: '/v', folder: 'P2', summaryFolder: 'S2' }), { vault: '/v', folder: 'P2', summaryFolder: 'S2', researchNote: 'Research/r.md' });
+  assert.deepEqual(settingsBody(s, { vault: '/w', folder: 'Papers', summaryFolder: 'AI/Sum' }), { vault: '/w', folder: 'Papers', summaryFolder: 'AI/Sum', researchNote: null });
+  // settings loaded before summaryFolder existed
+  assert.deepEqual(settingsBody({ vault: '/v', folder: 'Papers', researchNote: null }, { researchNote: 'x.md' }), { vault: '/v', folder: 'Papers', summaryFolder: 'Summaries', researchNote: 'x.md' });
 });
 
 test('jobView: connections jobs get their own texts (never "요약")', () => {

@@ -32,7 +32,24 @@ export function noteOptions(notes) {
   });
 }
 
-export const exportMessage = (r) => `Obsidian에 저장했습니다: ${r?.relPath ?? ''}`;
+// Response of POST /api/papers/:id/obsidian: { paperNote, summaryNote (null without a summary) }.
+export const exportMessage = (r) => `Obsidian에 저장했습니다: ${r?.paperNote ?? ''}${r?.summaryNote ? ` · ${r.summaryNote}` : ''}`;
+
+export const DEFAULT_FOLDER = 'Notes/Papers';
+export const DEFAULT_SUMMARY_FOLDER = 'Summaries';
+
+// Pure: PUT body from the current settings plus one change, so saving one field never resets the others.
+// A research note belongs to its vault: switching vaults clears it.
+export function settingsBody(s, change) {
+  const vault = change.vault ?? s.vault;
+  const sameVault = vault === s.vault;
+  return {
+    vault,
+    folder: change.folder ?? s.folder ?? DEFAULT_FOLDER,
+    summaryFolder: change.summaryFolder ?? s.summaryFolder ?? DEFAULT_SUMMARY_FOLDER,
+    researchNote: 'researchNote' in change ? change.researchNote : sameVault ? s.researchNote ?? null : null,
+  };
+}
 
 // Sidebar "Obsidian" section. actions: obsidianSettings(), saveObsidianSettings(body), obsidianNotes(), toast(msg).
 export function obsidianSection(actions) {
@@ -47,16 +64,22 @@ export function obsidianSection(actions) {
       placeholder: '/Users/me/Vault', autocomplete: 'off', spellcheck: 'false',
     });
     const folderIn = el('input', {
-      type: 'text', class: 'folder-input', id: 'obs-folder', name: 'obs-folder', value: s.folder || 'Notes/Papers',
-      placeholder: 'Notes/Papers', autocomplete: 'off', spellcheck: 'false',
+      type: 'text', class: 'folder-input', id: 'obs-folder', name: 'obs-folder', value: s.folder || DEFAULT_FOLDER,
+      placeholder: 'Papers', autocomplete: 'off', spellcheck: 'false',
+    });
+    const summaryIn = el('input', {
+      type: 'text', class: 'folder-input', id: 'obs-summary-folder', name: 'obs-summary-folder', value: s.summaryFolder || DEFAULT_SUMMARY_FOLDER,
+      placeholder: DEFAULT_SUMMARY_FOLDER, autocomplete: 'off', spellcheck: 'false',
     });
     const saveBtn = el('button', { type: 'submit', class: 'btn btn-small', text: '저장' });
     const form = el('form', { class: 'obs-form' },
       el('label', { class: 'folder-note', for: 'obs-vault', text: 'vault 폴더 (절대 경로)' }),
       vaultIn,
       s.vault && !s.vaultOk ? el('span', { class: 'folder-warn', role: 'status', text: 'vault를 찾을 수 없습니다' }) : null,
-      el('label', { class: 'folder-note', for: 'obs-folder', text: '짝 노트 폴더 (vault 기준)' }),
+      el('label', { class: 'folder-note', for: 'obs-folder', text: '논문 노트 폴더 (vault 기준)' }),
       folderIn,
+      el('label', { class: 'folder-note', for: 'obs-summary-folder', text: '요약 노트 폴더 (vault 기준)' }),
+      summaryIn,
       el('div', { class: 'obs-actions' }, saveBtn),
     );
     form.addEventListener('submit', async (e) => {
@@ -65,9 +88,7 @@ export function obsidianSection(actions) {
       if (!vault) { vaultIn.focus(); return; }
       saveBtn.disabled = true;
       try {
-        // A research note belongs to its vault: switching vaults clears it.
-        const researchNote = vault === s.vault ? s.researchNote : null;
-        draw(await actions.saveObsidianSettings({ vault, folder: folderIn.value.trim(), researchNote }));
+        draw(await actions.saveObsidianSettings(settingsBody(s, { vault, folder: folderIn.value.trim(), summaryFolder: summaryIn.value.trim() })));
         actions.toast('Obsidian 설정을 저장했습니다.');
       } catch (err) {
         actions.toast(err.message);
@@ -91,7 +112,7 @@ export function obsidianSection(actions) {
       select.addEventListener('change', async () => {
         select.disabled = true;
         try {
-          draw(await actions.saveObsidianSettings({ vault: s.vault, folder: s.folder, researchNote: select.value || null }));
+          draw(await actions.saveObsidianSettings(settingsBody(s, { researchNote: select.value || null })));
           actions.toast(select.value ? '연구 주제 노트를 골랐습니다.' : '연구 주제 노트를 비웠습니다.');
         } catch (err) {
           actions.toast(err.message);
@@ -123,7 +144,7 @@ export function exportButton({ id, actions }) {
     const r = obsidianReady(s);
     ready = r.export;
     button.disabled = !ready;
-    button.title = r.exportHint ?? '읽기 노트를 Obsidian vault에 짝 노트로 저장합니다.';
+    button.title = r.exportHint ?? '논문 노트(내 하이라이트·메모)와 요약 노트(AI 요약·연결 메모)를 Obsidian vault에 저장합니다.';
   };
   button.addEventListener('click', async () => {
     if (!ready) return;
