@@ -1142,3 +1142,71 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.equal((await send('PUT', '/api/library/folders', { folders: [] })).status, 200);
   assert.equal(JSON.parse(await fs.readFile(path.join(dataDir, 'settings.json'), 'utf8')).obsidian.vault, vault);
 });
+
+test('connections API: 400 without a research note, vault-only reads, 202 job, GET file, PUT/DELETE items', async (t) => {
+  const research = '# 연구 주제\n## 축 A\n';
+  const item = { target: '축 A', text: '논문은 a라고 밝힌다.', evidence: ['p1-s1'] };
+  const ctx = await digestServer(t, { runs: [async (w) => { await fs.writeFile(path.join(w, 'connections.json'), JSON.stringify({ version: 1, paperId: 'd1', items: [item, { ...item, text: '둘째' }] })); return { code: 0 }; }] });
+  const settings = path.join(ctx.dataDir, 'settings.json');
+  const setObsidian = async (obsidian) => fs.writeFile(settings, JSON.stringify({ folders: [ctx.root], obsidian }));
+  const send = (method, p, body, headers = { 'content-type': 'application/json' }) => fetch(ctx.b + p, { method, headers, body: JSON.stringify(body) });
+
+  assert.equal((await fetch(`${ctx.b}/api/papers/d1/connections-job`)).status, 404);
+  assert.deepEqual(await (await fetch(`${ctx.b}/api/papers/d1/connections`)).json(), { connections: null });
+  assert.equal((await ctx.jpost('/api/papers/d1/connections', {}, { 'content-type': 'text/plain' })).status, 415);
+  const unset = await ctx.jpost('/api/papers/d1/connections');
+  assert.equal(unset.status, 400);
+  assert.equal((await unset.json()).error, 'Obsidian 설정에서 연구 주제 노트를 먼저 고르세요.');
+
+  const vault = path.join(path.dirname(ctx.out), 'vault');
+  await fs.mkdir(path.join(vault, 'Notes'), { recursive: true });
+  await fs.writeFile(path.join(vault, 'Notes', '연구 주제.md'), research);
+  await fs.writeFile(path.join(path.dirname(ctx.out), 'outside.md'), '# 밖\n');
+  await fs.symlink(path.join(path.dirname(ctx.out), 'outside.md'), path.join(vault, 'Notes', 'link.md'));
+  await setObsidian({ vault, folder: 'Notes/Papers', researchNote: null });
+  assert.equal((await ctx.jpost('/api/papers/d1/connections')).status, 400);
+  for (const rel of ['../outside.md', 'Notes/link.md', 'Notes/없음.md']) {
+    await setObsidian({ vault, folder: 'Notes/Papers', researchNote: rel });
+    const r = await ctx.jpost('/api/papers/d1/connections');
+    assert.equal(r.status, 400, rel);
+    assert.ok(!(await r.json()).error.includes(vault));
+  }
+  assert.equal(ctx.calls.length, 0);
+
+  await setObsidian({ vault, folder: 'Notes/Papers', researchNote: 'Notes/연구 주제.md' });
+  assert.equal((await ctx.jpost('/api/papers/ghost/connections')).status, 404);
+  const res = await ctx.jpost('/api/papers/d1/connections');
+  assert.equal(res.status, 202);
+  const j = await res.json();
+  assert.equal(j.kind, 'connections');
+  assert.equal(j.maxAttempts, 2);
+  let done;
+  for (let i = 0; i < 400; i += 1) {
+    done = await (await fetch(`${ctx.b}/api/papers/d1/connections-job`)).json();
+    if (['done', 'failed', 'cancelled'].includes(done.state)) break;
+    await new Promise((r) => setTimeout(r, 5));
+  }
+  assert.equal(done.state, 'done', done.message);
+  assert.equal((await fetch(`${ctx.b}/api/papers/d1/digest-job`)).status, 404);
+  const { connections } = await (await fetch(`${ctx.b}/api/papers/d1/connections`)).json();
+  assert.equal(connections.researchNote, 'Notes/연구 주제.md');
+  assert.deepEqual(connections.items.map((x) => x.id), ['k1', 'k2']);
+  assert.equal(await fs.readFile(path.join(vault, 'Notes', '연구 주제.md'), 'utf8'), research);
+
+  // edit / delete
+  assert.equal((await send('PUT', '/api/papers/d1/connections/k1', { text: 'x' }, { 'content-type': 'text/plain' })).status, 415);
+  assert.equal((await send('PUT', '/api/papers/d1/connections/k1', { text: 'x'.repeat(301) })).status, 400);
+  assert.equal((await send('PUT', '/api/papers/d1/connections/k9', { text: 'x' })).status, 404);
+  const ed = await send('PUT', '/api/papers/d1/connections/k1', { text: '고친 설명' });
+  assert.equal(ed.status, 200);
+  assert.deepEqual((await ed.json()).connections.items[0], { id: 'k1', target: '축 A', text: '고친 설명', evidence: ['p1-s1'], edited: true });
+  const del = await fetch(`${ctx.b}/api/papers/d1/connections/k2`, { method: 'DELETE' });
+  assert.equal(del.status, 200);
+  assert.deepEqual((await del.json()).connections.items.map((x) => x.id), ['k1']);
+  assert.equal((await fetch(`${ctx.b}/api/papers/d1/connections/k2`, { method: 'DELETE' })).status, 404);
+  const stored = JSON.parse(await fs.readFile(path.join(ctx.out, 'd1', 'connections.json'), 'utf8'));
+  assert.deepEqual(stored.items.map((x) => x.text), ['고친 설명']);
+
+  // cancel route: nothing running → 404
+  assert.equal((await ctx.jpost('/api/papers/d1/connections-job/cancel')).status, 404);
+});

@@ -15,6 +15,7 @@ import { detectAgents as defaultDetectAgents } from '../agent/detect.mjs';
 import { createLibrary } from '../library/scan.mjs';
 import { createExtractJob } from '../library/extract-job.mjs';
 import { createDigestJobs } from '../agent/digest-job.mjs';
+import { readConnectionsFile, editConnectionItem, deleteConnectionItem } from '../agent/connections.mjs';
 import { readNotes } from '../notes/store.mjs';
 import { buildCompanionNote, companionFileName, researchHeadings } from '../obsidian/note.mjs';
 import { writeCompanionNote, listVaultNotes, readVaultNote, resolveVault } from '../obsidian/write.mjs';
@@ -137,6 +138,7 @@ async function readFigure(paperDir, name) {
 }
 
 const nfc = (s) => s.normalize('NFC');
+const RESEARCH_UNSET_MESSAGE = 'Obsidian 설정에서 연구 주제 노트를 먼저 고르세요.';
 
 // Among bundles of the same PDF keep one: has digest, then Zotero-linked, then oldest source.json, then id.
 async function preferredOf(out, group) {
@@ -246,6 +248,13 @@ export function createServer(cfg, deps = {}) {
         return (await library.list(folders)).files.some((f) => f.id === id);
       },
       extract: (id) => runExtract(id),
+      // Research note for connection notes: read through the vault checks (never outside the vault).
+      researchNote: async () => {
+        const o = (await savedSettings()).obsidian;
+        if (!o?.vault || !o.researchNote) throw new HttpError(400, RESEARCH_UNSET_MESSAGE);
+        const text = await obsidianCall(() => readVaultNote(o.vault, o.researchNote));
+        return { path: o.researchNote, name: path.posix.basename(o.researchNote).replace(/\.md$/i, ''), text };
+      },
       recordModel: async ({ agent, profile, model }) => { if (dataDir) await recordLastModel(dataDir, lastModelKey(agent, profile), model); },
     },
   });
@@ -517,6 +526,42 @@ export function createServer(cfg, deps = {}) {
       await readBody(req);
       if (!digestJobs.cancel(id)) throw new HttpError(404, '진행 중인 요약 작업이 없습니다.');
       return sendJson(res, 200, digestJobs.get(id));
+    }
+
+    // Research connection notes (AI-written, kept apart from the digest).
+    if (parts[1] === 'papers' && parts[3] === 'connections' && (parts.length === 4 || parts.length === 5)) {
+      const id = checkName(parts[2], 'id');
+      const connCall = async (fn) => {
+        try { return await fn(); } catch (err) { if (err.status) throw new HttpError(err.status, err.message); throw err; }
+      };
+      if (parts.length === 4) {
+        if (method === 'GET') return sendJson(res, 200, { connections: await connCall(() => readConnectionsFile(out, id)) });
+        if (method !== 'POST') throw new HttpError(405, '허용되지 않는 메서드입니다.');
+        await readBody(req);
+        if (!dataDir) throw new HttpError(500, '데이터 폴더가 설정되지 않았습니다.');
+        return sendJson(res, 202, await connCall(() => digestJobs.start(id, { kind: 'connections' })));
+      }
+      const itemId = checkName(parts[4], '항목 id');
+      if (!(await readPaper(out, id, opts))) throw new HttpError(404, '논문을 찾을 수 없습니다.');
+      if (method === 'PUT') {
+        const body = await readBody(req);
+        return sendJson(res, 200, { connections: await connCall(() => editConnectionItem(out, id, itemId, body?.text)) });
+      }
+      if (method === 'DELETE') return sendJson(res, 200, { connections: await connCall(() => deleteConnectionItem(out, id, itemId)) });
+      throw new HttpError(405, '허용되지 않는 메서드입니다.');
+    }
+
+    if (parts[1] === 'papers' && parts.length === 4 && parts[3] === 'connections-job' && method === 'GET') {
+      const job = digestJobs.get(checkName(parts[2], 'id'), 'connections');
+      if (!job) throw new HttpError(404, '연결 메모 작업이 없습니다.');
+      return sendJson(res, 200, job);
+    }
+
+    if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'connections-job' && parts[4] === 'cancel' && method === 'POST') {
+      const id = checkName(parts[2], 'id');
+      await readBody(req);
+      if (!digestJobs.cancel(id, 'connections')) throw new HttpError(404, '진행 중인 연결 메모 작업이 없습니다.');
+      return sendJson(res, 200, digestJobs.get(id, 'connections'));
     }
 
     if (parts[1] === 'papers' && parts.length === 5 && parts[3] === 'figures' && method === 'GET') {

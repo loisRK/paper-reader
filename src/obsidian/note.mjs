@@ -226,7 +226,9 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
 
   L.push('## 연구 연결 메모 (AI가 쓴 연결점 · 논문 내용 아님)');
   const items = Array.isArray(connections?.items) ? connections.items : [];
-  if (!items.length) L.push('연결 메모를 아직 만들지 않았습니다.');
+  if (!items.length) {
+    L.push(Array.isArray(connections?.items) ? '연구 주제 노트와 이어지는 내용을 찾지 못했습니다.' : '연결 메모를 아직 만들지 않았습니다.');
+  }
   const noteName = linkPart(researchNoteName ?? '');
   for (const it of items) {
     const target = inline(it?.target);

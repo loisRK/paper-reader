@@ -141,6 +141,9 @@ test('companion note: connections absent vs present (missing heading flagged)', 
   assert.ok(sec.includes('> [!note] GPU 관리와 이어진다. — 연결 대상: [[연구 주제#축 A]]\n> 근거: "First sentence." (p.1)\n> 근거: "Page two more." (p.2)\n'), sec);
   assert.ok(sec.includes('> [!note] 연결 둘. — 연결 대상: 사라진 제목 (연구 노트에서 제목을 찾지 못함)\n> 근거: "Page three." (p.3)\n'), sec);
   assert.ok(!sec.includes('아직 만들지 않았습니다'));
+  // generated but nothing related: say so instead of "not created yet"
+  const none = build({ connections: { version: 1, items: [] } });
+  assert.ok(none.includes('## 연구 연결 메모 (AI가 쓴 연결점 · 논문 내용 아님)\n연구 주제 노트와 이어지는 내용을 찾지 못했습니다.\n'), none);
 });
 
 test('companion note: paper without Zotero has no [[@…]] link or pandoc citation', () => {

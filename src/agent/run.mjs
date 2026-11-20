@@ -39,8 +39,8 @@ function inside(parent, child) {
   return rel === '' || (!rel.startsWith('..') && !path.isAbsolute(rel));
 }
 
-/** Writes only the allowed files into a fresh temp dir. `source` is the path of source.json; the AI gets paper.txt/figures.txt, never source.json. */
-export async function prepareWorkdir({ source, digestRules, previousDigest }) {
+// A fresh temp dir outside $HOME, filled by `fill(dir)`; every file in it ends up 0600. Removed on failure.
+async function freshWorkdir(fill) {
   const dir = await fsp.mkdtemp(path.join(os.tmpdir(), 'paper-reader-digest-'));
   try {
     // The Claude settings deny Read(~/**); a workdir under $HOME would block the agent's own files.
@@ -48,18 +48,40 @@ export async function prepareWorkdir({ source, digestRules, previousDigest }) {
     if (inside(os.homedir(), real) || inside(await fsp.realpath(os.homedir()), real)) {
       throw new Error('임시 작업 폴더가 홈 폴더 안에 있어 AI 도구를 안전하게 실행할 수 없습니다. TMPDIR을 홈 폴더 밖으로 지정하세요.');
     }
-    const parsed = JSON.parse(await fsp.readFile(source, 'utf8'));
-    await fsp.writeFile(path.join(dir, 'paper.txt'), paperText(parsed));
-    await fsp.writeFile(path.join(dir, 'figures.txt'), figuresText(parsed));
-    await fsp.copyFile(digestRules, path.join(dir, 'digest.md'));
-    if (previousDigest) await fsp.copyFile(previousDigest, path.join(dir, 'digest.json'));
-    await fsp.writeFile(path.join(dir, 'TASK.md'), taskMd(parsed.id, Array.isArray(parsed.pages) ? parsed.pages.length : 0));
+    await fill(dir);
     for (const f of await fsp.readdir(dir)) await fsp.chmod(path.join(dir, f), 0o600);
   } catch (err) {
     await fsp.rm(dir, { recursive: true, force: true });
     throw err;
   }
   return dir;
+}
+
+/** Writes only the allowed files into a fresh temp dir. `source` is the path of source.json; the AI gets paper.txt/figures.txt, never source.json. */
+export function prepareWorkdir({ source, digestRules, previousDigest }) {
+  return freshWorkdir(async (dir) => {
+    const parsed = JSON.parse(await fsp.readFile(source, 'utf8'));
+    await fsp.writeFile(path.join(dir, 'paper.txt'), paperText(parsed));
+    await fsp.writeFile(path.join(dir, 'figures.txt'), figuresText(parsed));
+    await fsp.copyFile(digestRules, path.join(dir, 'digest.md'));
+    if (previousDigest) await fsp.copyFile(previousDigest, path.join(dir, 'digest.json'));
+    await fsp.writeFile(path.join(dir, 'TASK.md'), taskMd(parsed.id, Array.isArray(parsed.pages) ? parsed.pages.length : 0));
+  });
+}
+
+/**
+ * Connections run: paper.txt, research.md (the research note's text, already read from the vault),
+ * digest-core.md, TASK.md and the rules as connections.md (+ the previous attempt's connections.json).
+ */
+export function prepareConnectionsWorkdir({ source, rules, researchText, taskText, digestCoreText, previous }) {
+  return freshWorkdir(async (dir) => {
+    await fsp.writeFile(path.join(dir, 'paper.txt'), paperText(source));
+    await fsp.writeFile(path.join(dir, 'research.md'), researchText);
+    await fsp.writeFile(path.join(dir, 'digest-core.md'), digestCoreText);
+    await fsp.copyFile(rules, path.join(dir, 'connections.md'));
+    if (previous) await fsp.copyFile(previous, path.join(dir, 'connections.json'));
+    await fsp.writeFile(path.join(dir, 'TASK.md'), taskText);
+  });
 }
 
 export async function cleanupWorkdir(dir) {

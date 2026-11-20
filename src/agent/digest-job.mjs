@@ -3,14 +3,20 @@ import path from 'node:path';
 import { randomUUID } from 'node:crypto';
 import { fileURLToPath } from 'node:url';
 import { buildPrompt as defaultBuildPrompt } from './commands.mjs';
-import { prepareWorkdir as defaultPrepare, cleanupWorkdir as defaultCleanup, runAgent as defaultRunAgent } from './run.mjs';
+import { prepareWorkdir as defaultPrepare, prepareConnectionsWorkdir as defaultPrepareConnections, cleanupWorkdir as defaultCleanup, runAgent as defaultRunAgent } from './run.mjs';
+import {
+  validateConnections, buildConnectionsPrompt, digestCore, connectionsTaskMd, saveConnections, CONNECTIONS_ATTEMPTS,
+} from './connections.mjs';
+import { researchHeadings } from '../obsidian/note.mjs';
 import { validateDigest } from '../digest/validate.mjs';
 import { readPaper } from '../reader/store.mjs';
 
 export const MAX_ATTEMPTS = 3;
 const LOG_LINES = 20;
 const LOG_CHARS = 200;
-const RULES_FILE = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'prompts', 'digest.md');
+const PROMPTS = path.join(path.dirname(fileURLToPath(import.meta.url)), '..', '..', 'prompts');
+const RULES_FILE = path.join(PROMPTS, 'digest.md');
+const CONNECTIONS_RULES = path.join(PROMPTS, 'connections.md');
 
 export const NO_AGENT_MESSAGE = '쓸 수 있는 AI 도구가 없습니다. Claude Code 또는 Codex 중 하나를 설치하고 로그인하세요.';
 export const BUSY_MESSAGE = '다른 논문의 요약을 만들고 있습니다.';
@@ -18,6 +24,11 @@ export const EXAMPLE_MESSAGE = '예제 논문은 요약을 다시 만들 수 없
 export const NOT_FOUND_MESSAGE = '논문을 찾을 수 없습니다.';
 export const UNEXPECTED_MESSAGE = '요약을 만들지 못했습니다. 기존 요약은 그대로입니다. 서버 로그를 확인하세요.';
 export const TIMEOUT_MESSAGE = '시간이 너무 오래 걸려 멈췄습니다.';
+export const CONNECTIONS_BUSY_MESSAGE = '연구 연결 메모를 만들고 있습니다. 끝난 뒤 다시 시도하세요.';
+export const CONNECTIONS_EXAMPLE_MESSAGE = '예제 논문은 연구 연결 메모를 만들 수 없습니다.';
+export const NO_HEADINGS_MESSAGE = '연구 주제 노트에 제목(#)이 없어 연결할 대상이 없습니다. 노트에 제목을 달아 주세요.';
+export const RESEARCH_TOO_LARGE_MESSAGE = '연구 주제 노트가 너무 큽니다 (최대 20만 자).';
+const MAX_RESEARCH_CHARS = 200_000;
 export const HAS_DIGEST_MESSAGE = "이미 요약이 있는 논문입니다. 다시 만들려면 논문 화면에서 '요약 다시 만들기'를 누르세요.";
 
 const REVISION = /-r(\d+)$/;
@@ -70,23 +81,31 @@ export function redactPaths(text) {
 }
 
 /**
- * One digest job at a time (any paper). deps:
+ * One AI job at a time (any paper, any kind). Kinds:
+ *  'digest'       writes digest.json (3 attempts; folder PDFs are extracted first)
+ *  'connections'  writes connections.json from the paper + the research note (2 attempts)
+ * deps:
  *  selectAgent() => Promise<id | { agent, profile?, configDir? } | null>   (configDir stays out of job state)
  *  findFolderPdf(id) => Promise<boolean>   (scanned folder PDF not yet extracted)
  *  extract(id) => Promise                  (stage 2 extraction; shares its busy flag)
+ *  researchNote() => Promise<{ path, name, text }>  (the research note, read from the vault; throws { status, message })
  *  recordModel({ agent, profile?, model }) => Promise  (the model a run reported; failures are ignored)
- *  runAgent, prepareWorkdir, cleanupWorkdir, buildPrompt, rulesFile, examplesDir, timeoutMs  (overridable)
+ *  runAgent, prepareWorkdir, prepareConnectionsWorkdir, cleanupWorkdir, buildPrompt, rulesFile, connectionsRules,
+ *  examplesDir, timeoutMs  (overridable)
  */
 export function createDigestJobs({ cfg, deps = {} }) {
   const {
     selectAgent = async () => null,
     findFolderPdf = async () => false,
     extract = async () => { throw new Error('추출할 수 없습니다.'); },
+    researchNote = async () => { throw new DigestJobError(400, 'Obsidian 설정에서 연구 주제 노트를 먼저 고르세요.'); },
     runAgent = defaultRunAgent,
     prepareWorkdir = defaultPrepare,
+    prepareConnectionsWorkdir = defaultPrepareConnections,
     cleanupWorkdir = defaultCleanup,
     buildPrompt = defaultBuildPrompt,
     rulesFile = RULES_FILE,
+    connectionsRules = CONNECTIONS_RULES,
     examplesDir,
     timeoutMs,
     recordModel = async () => {},
@@ -94,8 +113,8 @@ export function createDigestJobs({ cfg, deps = {} }) {
   } = deps;
   const out = cfg.outputDir;
   const readOpts = examplesDir === undefined ? {} : { examplesDir };
-  const last = new Map(); // paperId -> job (public state)
-  let current = null; // { job, cancelled, handle, settled } | 'starting'
+  const last = { digest: new Map(), connections: new Map() }; // kind -> paperId -> job (public state)
+  let current = null; // { job, kind, cancelled, handle, settled } | 'starting'
 
   const snapshot = (job) => (job ? { ...job, log: [...job.log], ...(job.problems ? { problems: [...job.problems] } : {}) } : null);
 
@@ -126,15 +145,20 @@ export function createDigestJobs({ cfg, deps = {} }) {
     }
   }
 
-  async function run(ctx, needsExtract) {
-    const { job } = ctx;
-    let paperDir = path.join(out, job.paperId);
-    let workdir = null;
-    // The terminal state is published only in `finally`, together with finishedAt, after cleanup.
-    let outcome = null;
-    const fail = (message) => { outcome = { state: 'failed', message: redactPaths(message) }; };
-    try {
-      if (needsExtract) {
+  // Per-kind steps of a job. `before` may change the paper (merge) or end the job early (returns an outcome).
+  const SPECS = {
+    digest: {
+      maxAttempts: MAX_ATTEMPTS,
+      output: 'digest.json',
+      writingLog: (n) => `${n}번째 시도: 요약을 쓰는 중`,
+      keepNote: '기존 요약은 그대로입니다.',
+      unexpected: UNEXPECTED_MESSAGE,
+      doneMessage: '새 요약이 준비되었습니다.',
+      cancelledMessage: '요약 만들기를 취소했습니다.',
+      fallbackMessage: '요약을 만들지 못했습니다.',
+      async before(ctx) {
+        const { job } = ctx;
+        if (!ctx.needsExtract) return null;
         addLog(job, 'PDF에서 본문을 추출하는 중');
         try {
           const r = await extract(job.paperId);
@@ -142,39 +166,97 @@ export function createDigestJobs({ cfg, deps = {} }) {
             // Same PDF already extracted under another id: digest that paper instead of a duplicate.
             job.paperId = r.id;
             ctx.ids.add(r.id);
-            last.set(r.id, job);
-            paperDir = path.join(out, r.id);
+            last.digest.set(r.id, job);
+            ctx.paperDir = path.join(out, r.id);
             // It already has a summary: regenerating is the paper view's explicit '요약 다시 만들기'.
-            if (r.state === 'digest' || (await readJsonFile(path.join(paperDir, 'digest.json'))) !== undefined) {
-              outcome = { state: 'done', existing: true, message: HAS_DIGEST_MESSAGE };
-              return;
+            if (r.state === 'digest' || (await readJsonFile(path.join(ctx.paperDir, 'digest.json'))) !== undefined) {
+              return { state: 'done', existing: true, message: HAS_DIGEST_MESSAGE };
             }
             addLog(job, `이미 추출된 같은 논문(${r.id})으로 진행합니다.`);
           }
         } catch (err) {
-          if (ctx.cancelled) return;
-          return fail(firstLine(err) || '추출에 실패했습니다.');
+          if (ctx.cancelled) return null;
+          return { state: 'failed', message: firstLine(err) || '추출에 실패했습니다.' };
         }
-        if (ctx.cancelled) return;
+        return null;
+      },
+      prepare: (ctx, prev) => prepareWorkdir({ source: ctx.sourceFile, digestRules: rulesFile, ...(prev ? { previousDigest: prev } : {}) }),
+      prompt: (attempt, problems) => buildPrompt({ attempt, problems }),
+      check(ctx, raw) {
+        const problems = validateDigest(raw, ctx.source).problems;
+        if (raw && typeof raw === 'object' && raw.paperId !== ctx.source.id) {
+          problems.push(`paperId가 source.json의 id(${ctx.source.id})와 다릅니다`);
+        }
+        return problems;
+      },
+      save: async (ctx, raw) => replaceDigest(ctx.paperDir, reviseCardIds(raw, await readJsonFile(path.join(ctx.paperDir, 'digest.json')))),
+    },
+    connections: {
+      maxAttempts: CONNECTIONS_ATTEMPTS,
+      output: 'connections.json',
+      writingLog: (n) => `${n}번째 시도: 연구 연결 메모를 쓰는 중`,
+      keepNote: '기존 연결 메모는 그대로입니다.',
+      unexpected: '연결 메모를 만들지 못했습니다. 기존 연결 메모는 그대로입니다. 서버 로그를 확인하세요.',
+      doneMessage: '연구 연결 메모가 준비되었습니다.',
+      cancelledMessage: '연결 메모 만들기를 취소했습니다.',
+      fallbackMessage: '연결 메모를 만들지 못했습니다.',
+      before: async () => null,
+      async prepare(ctx, prev) {
+        if (ctx.digestCoreText === undefined) ctx.digestCoreText = digestCore((await readJsonFile(path.join(ctx.paperDir, 'digest.json'))) ?? null);
+        return prepareConnectionsWorkdir({
+          source: ctx.source,
+          rules: connectionsRules,
+          researchText: ctx.research.text,
+          taskText: connectionsTaskMd(ctx.source.id, ctx.research.name),
+          digestCoreText: ctx.digestCoreText,
+          ...(prev ? { previous: prev } : {}),
+        });
+      },
+      prompt: (attempt, problems) => buildConnectionsPrompt({ attempt, problems }),
+      check: (ctx, raw) => validateConnections(raw, ctx.source, ctx.headings).problems,
+      async save(ctx, raw) {
+        const { connections } = validateConnections(raw, ctx.source, ctx.headings);
+        await saveConnections(out, ctx.job.paperId, {
+          ...connections,
+          researchNote: ctx.research.path,
+          createdAt: new Date().toISOString(),
+          agent: ctx.job.agent,
+          model: ctx.model ?? null,
+        });
+      },
+    },
+  };
+
+  async function run(ctx) {
+    const { job } = ctx;
+    const spec = SPECS[ctx.kind];
+    ctx.paperDir = path.join(out, job.paperId);
+    let workdir = null;
+    // The terminal state is published only in `finally`, together with finishedAt, after cleanup.
+    let outcome = null;
+    const fail = (message) => { outcome = { state: 'failed', message: redactPaths(message) }; };
+    try {
+      const early = await spec.before(ctx);
+      if (ctx.cancelled) return;
+      if (early) {
+        if (early.state === 'failed') return fail(early.message);
+        outcome = early;
+        return;
       }
-      const sourceFile = path.join(paperDir, 'source.json');
-      const source = await readJsonFile(sourceFile);
-      if (!source) return fail('source.json을 읽을 수 없습니다.');
+      ctx.sourceFile = path.join(ctx.paperDir, 'source.json');
+      ctx.source = await readJsonFile(ctx.sourceFile);
+      if (!ctx.source) return fail('source.json을 읽을 수 없습니다.');
 
       let problems = [];
-      for (let attempt = 1; attempt <= MAX_ATTEMPTS; attempt += 1) {
+      for (let attempt = 1; attempt <= spec.maxAttempts; attempt += 1) {
         if (ctx.cancelled) return;
         job.attempt = attempt;
         job.state = attempt === 1 ? 'writing' : 'retrying';
-        // Fresh workdir per attempt; the previous attempt's digest.json carries over.
+        // Fresh workdir per attempt; the previous attempt's output file carries over.
         const prevDir = workdir;
-        const prevDigest = prevDir ? path.join(prevDir, 'digest.json') : null;
+        const prevOut = prevDir ? path.join(prevDir, spec.output) : null;
         try {
-          workdir = await prepareWorkdir({
-            source: sourceFile,
-            digestRules: rulesFile,
-            ...(prevDigest && (await fs.access(prevDigest).then(() => true, () => false)) ? { previousDigest: prevDigest } : {}),
-          });
+          workdir = await spec.prepare(ctx, prevOut && (await fs.access(prevOut).then(() => true, () => false)) ? prevOut : null);
         } catch (err) {
           workdir = prevDir;
           const msg = firstLine(err);
@@ -182,69 +264,83 @@ export function createDigestJobs({ cfg, deps = {} }) {
         }
         if (prevDir) await cleanupWorkdir(prevDir);
         if (ctx.cancelled) return;
-        addLog(job, `${attempt}번째 시도: 요약을 쓰는 중`);
+        addLog(job, spec.writingLog(attempt));
         ctx.handle = runAgent({
           id: job.agent,
           ...(ctx.configDir ? { configDir: ctx.configDir } : {}),
           ...(job.profile ? { label: job.profile } : {}),
           workdir,
-          prompt: buildPrompt({ attempt, problems }),
+          prompt: spec.prompt(attempt, problems),
           onLog: (line) => addLog(job, line),
           ...(timeoutMs ? { timeoutMs } : {}),
         });
         const result = await ctx.handle.done;
         ctx.handle = null;
         if (result.model) {
+          ctx.model = result.model;
           try { await recordModel({ agent: job.agent, ...(job.profile ? { profile: job.profile } : {}), model: result.model }); } catch (err) { console.error('[digest-job] recordModel', err?.code ?? ''); }
         }
         if (ctx.cancelled) return;
         if (result.timedOut) return fail(TIMEOUT_MESSAGE);
         if (result.code !== 0) {
-          return fail(result.errorHint ?? `AI 도구가 오류로 끝났습니다${result.code === null ? '' : ` (종료 코드 ${result.code})`}. 기존 요약은 그대로입니다.`);
+          return fail(result.errorHint ?? `AI 도구가 오류로 끝났습니다${result.code === null ? '' : ` (종료 코드 ${result.code})`}. ${spec.keepNote}`);
         }
         job.state = 'checking';
-        const raw = await readJsonFile(path.join(workdir, 'digest.json'));
-        if (raw === undefined) {
-          problems = ['digest.json이 없거나 JSON 형식이 올바르지 않습니다 – 작업 폴더에 digest.json을 쓰세요'];
-        } else {
-          problems = validateDigest(raw, source).problems;
-          if (raw && typeof raw === 'object' && raw.paperId !== source.id) {
-            problems.push(`paperId가 source.json의 id(${source.id})와 다릅니다`);
-          }
-        }
+        const raw = await readJsonFile(path.join(workdir, spec.output));
+        problems = raw === undefined
+          ? [`${spec.output}이 없거나 JSON 형식이 올바르지 않습니다 – 작업 폴더에 ${spec.output}을 쓰세요`]
+          : spec.check(ctx, raw);
         if (!problems.length) {
           if (ctx.cancelled) return;
-          await replaceDigest(paperDir, reviseCardIds(raw, await readJsonFile(path.join(paperDir, 'digest.json'))));
-          outcome = { state: 'done', message: '새 요약이 준비되었습니다.' };
+          await spec.save(ctx, raw);
+          outcome = { state: 'done', message: spec.doneMessage };
           delete job.problems;
           return;
         }
         job.problems = problems.slice(0, 50);
         addLog(job, `검증 문제 ${problems.length}건`);
       }
-      fail(`${MAX_ATTEMPTS}번 시도했지만 검증을 통과하지 못했습니다. 기존 요약은 그대로입니다.`);
+      fail(`${spec.maxAttempts}번 시도했지만 검증을 통과하지 못했습니다. ${spec.keepNote}`);
     } catch (err) {
       // Raw fs errors carry absolute paths: log them on the server only.
       console.error('[digest-job]', err);
-      fail(`${UNEXPECTED_MESSAGE}${/^E[A-Z]+$/.test(err?.code ?? '') ? ` (${err.code})` : ''}`);
+      fail(`${spec.unexpected}${/^E[A-Z]+$/.test(err?.code ?? '') ? ` (${err.code})` : ''}`);
     } finally {
-      if (!outcome) outcome = ctx.cancelled ? { state: 'cancelled', message: '요약 만들기를 취소했습니다.' } : { state: 'failed', message: '요약을 만들지 못했습니다.' };
+      if (!outcome) outcome = ctx.cancelled ? { state: 'cancelled', message: spec.cancelledMessage } : { state: 'failed', message: spec.fallbackMessage };
       if (workdir) await cleanupWorkdir(workdir).catch(() => {});
       Object.assign(job, outcome, { finishedAt: new Date().toISOString() });
       if (current === ctx) current = null;
     }
   }
 
-  async function start(paperId) {
-    if (current) throw new DigestJobError(409, BUSY_MESSAGE);
+  // Connections: the paper must exist (no extraction) and the research note must have headings.
+  async function connectionsInput(paperId, paper) {
+    if (paper?.example) throw new DigestJobError(400, CONNECTIONS_EXAMPLE_MESSAGE);
+    if (!paper) throw new DigestJobError(404, NOT_FOUND_MESSAGE);
+    const note = await researchNote();
+    const text = typeof note?.text === 'string' ? note.text : '';
+    if (text.length > MAX_RESEARCH_CHARS) throw new DigestJobError(400, RESEARCH_TOO_LARGE_MESSAGE);
+    const headings = researchHeadings(text);
+    if (!headings.length) throw new DigestJobError(400, NO_HEADINGS_MESSAGE);
+    return { research: { path: String(note.path ?? ''), name: String(note.name ?? ''), text }, headings };
+  }
+
+  async function start(paperId, { kind = 'digest' } = {}) {
+    if (!SPECS[kind]) throw new DigestJobError(400, '알 수 없는 작업 종류입니다.');
+    if (current) throw new DigestJobError(409, current !== 'starting' && current.kind === 'connections' ? CONNECTIONS_BUSY_MESSAGE : BUSY_MESSAGE);
     current = 'starting';
     try {
       const paper = await readPaper(out, paperId, readOpts);
       let needsExtract = false;
-      if (paper?.example) throw new DigestJobError(400, EXAMPLE_MESSAGE);
-      if (!paper) {
-        if (!(await findFolderPdf(paperId))) throw new DigestJobError(404, NOT_FOUND_MESSAGE);
-        needsExtract = true;
+      let extra = {};
+      if (kind === 'connections') {
+        extra = await connectionsInput(paperId, paper);
+      } else {
+        if (paper?.example) throw new DigestJobError(400, EXAMPLE_MESSAGE);
+        if (!paper) {
+          if (!(await findFolderPdf(paperId))) throw new DigestJobError(404, NOT_FOUND_MESSAGE);
+          needsExtract = true;
+        }
       }
       const picked = await selectAgent();
       const agent = typeof picked === 'string' ? picked : picked?.agent;
@@ -252,19 +348,24 @@ export function createDigestJobs({ cfg, deps = {} }) {
       const profile = typeof picked === 'object' && typeof picked.profile === 'string' ? picked.profile : undefined;
       const job = {
         id: randomUUID(),
+        kind,
         paperId,
         agent,
         ...(profile ? { profile } : {}),
         state: needsExtract ? 'extracting' : 'writing',
         attempt: needsExtract ? 0 : 1,
-        maxAttempts: MAX_ATTEMPTS,
+        maxAttempts: SPECS[kind].maxAttempts,
         log: [],
         startedAt: new Date().toISOString(),
       };
-      const ctx = { job, ids: new Set([paperId]), cancelled: false, handle: null, settled: null, configDir: typeof picked === 'object' ? picked.configDir ?? null : null };
+      const ctx = {
+        job, kind, needsExtract, ...extra,
+        ids: new Set([paperId]), cancelled: false, handle: null, settled: null,
+        configDir: typeof picked === 'object' ? picked.configDir ?? null : null,
+      };
       current = ctx;
-      last.set(paperId, job);
-      ctx.settled = run(ctx, needsExtract);
+      last[kind].set(paperId, job);
+      ctx.settled = run(ctx);
       return snapshot(job);
     } catch (err) {
       if (current === 'starting') current = null;
@@ -272,9 +373,9 @@ export function createDigestJobs({ cfg, deps = {} }) {
     }
   }
 
-  function cancel(paperId) {
+  function cancel(paperId, kind = 'digest') {
     const ctx = current;
-    if (!ctx || ctx === 'starting' || !ctx.ids.has(paperId) || ctx.cancelled) return false;
+    if (!ctx || ctx === 'starting' || ctx.kind !== kind || !ctx.ids.has(paperId) || ctx.cancelled) return false;
     ctx.cancelled = true;
     ctx.handle?.cancel();
     return true;
@@ -291,5 +392,5 @@ export function createDigestJobs({ cfg, deps = {} }) {
     clearTimeout(timer);
   }
 
-  return { start, get: (paperId) => snapshot(last.get(paperId)), cancel, shutdown };
+  return { start, get: (paperId, kind = 'digest') => snapshot(last[kind]?.get(paperId)), cancel, shutdown };
 }
