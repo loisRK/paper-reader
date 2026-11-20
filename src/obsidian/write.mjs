@@ -110,7 +110,7 @@ async function readExisting(file) {
 
 /**
  * Creates or updates several notes of one paper together (paper note + summary note):
- * notes = [{ folder, fileName, managed, userSection? }] → [{ relPath }].
+ * notes = [{ folder, fileName, managed, userSection?, ownedKeys? }] → [{ relPath }].
  * Every note is checked (paths, file slots, markers) before anything is written, so one broken note means
  * none is written — not even a new folder. Only the managed block of an existing file changes.
  */
@@ -128,7 +128,9 @@ export async function writeNotes({ vault, notes }) {
     for (const p of plan) {
       const dir = await vaultDir(realVault, p.parts, { create: false });
       const existing = dir ? await readExisting(path.join(dir, p.name)) : null;
-      const merged = mergeManaged(existing, p.managed, p.userSection === undefined ? {} : { userSection: p.userSection });
+      const merged = mergeManaged(existing, p.managed, {
+        ...(p.userSection === undefined ? {} : { userSection: p.userSection }), ownedKeys: p.ownedKeys ?? [],
+      });
       if (merged.error) {
         const which = plan.length > 1 ? '두 노트 모두' : '노트를';
         throw new ObsidianError(409, `${p.relPath}의 paper-reader 표시가 깨져 있어 ${which} 쓰지 않았습니다. 표시를 고치거나 파일을 옮긴 뒤 다시 보내세요.`);

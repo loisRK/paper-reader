@@ -3,7 +3,7 @@ import fs from 'node:fs/promises';
 import path from 'node:path';
 import { resolveVault, relativeParts, vaultDir, ObsidianError } from './write.mjs';
 
-export const DEFAULT_FOLDER = 'Notes/Papers';
+export const DEFAULT_FOLDER = 'Papers';
 export const DEFAULT_SUMMARY_FOLDER = 'Summaries';
 const blank = (v) => v === undefined || v === null || v === '';
 

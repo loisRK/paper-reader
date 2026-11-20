@@ -5,7 +5,7 @@ import os from 'node:os';
 import path from 'node:path';
 import {
   BEGIN, END, MARKER_ERROR, USER_SECTION, buildPaperNote, buildSummaryNote, mergeManaged, paperNoteFileName, summaryNoteFileName,
-  noteKeywords, researchHeadings, signalOf,
+  noteKeywords, researchHeadings, signalOf, PAPER_OWNED_KEYS, SUMMARY_OWNED_KEYS,
 } from '../src/obsidian/note.mjs';
 import { writeNotes, sanitizeFileName, listVaultNotes } from '../src/obsidian/write.mjs';
 import { validateObsidianSettings, DEFAULT_FOLDER, DEFAULT_SUMMARY_FOLDER } from '../src/obsidian/settings.mjs';
@@ -291,6 +291,85 @@ test('mergeManaged: existing file keeps everything outside the markers byte-iden
   assert.equal(text, `---\ncitekey: "x"\nmine: 1\n---\r\nintro\n${BEGIN}\nNEW\n${END}\n\n## 내 생각\n내가 쓴 글 ✍️\r\n`);
 });
 
+test('owned frontmatter keys: the app updates these, the user owns the rest (tags only on creation)', () => {
+  assert.deepEqual(PAPER_OWNED_KEYS, ['citekey', 'title', 'authors', 'year', 'doi', 'zotero', 'summary']);
+  assert.deepEqual(SUMMARY_OWNED_KEYS, ['citekey', 'paper', 'keywords']);
+});
+
+test('mergeManaged: owned frontmatter keys are replaced in place; user keys, comments and multi-line values stay', () => {
+  const existing = [
+    '---',
+    'citekey: "x"',
+    '# my comment',
+    'summary: "요약 없음"',
+    'aliases:',
+    '  - 별칭 하나',
+    '  - 별칭 둘',
+    'tags: [paper, 읽는중]',
+    'authors:',
+    '  - Old A',
+    'rating: 5',
+    '---',
+    'intro',
+    BEGIN, 'OLD', END, '', '## 내 생각', '내 글', '',
+  ].join('\n');
+  const fresh = `---\ncitekey: "x"\ntitle: "T"\nauthors: ["A", "B"]\nsummary: "[[@x 요약]]"\ntags: [paper]\n---\n${BEGIN}\nNEW\n${END}\n`;
+  const { text } = mergeManaged(existing, fresh, { ownedKeys: PAPER_OWNED_KEYS });
+  assert.equal(text, [
+    '---',
+    'citekey: "x"',
+    '# my comment',
+    'summary: "[[@x 요약]]"',
+    'aliases:',
+    '  - 별칭 하나',
+    '  - 별칭 둘',
+    'tags: [paper, 읽는중]',
+    'authors: ["A", "B"]',
+    'rating: 5',
+    'title: "T"',
+    '---',
+    'intro',
+    BEGIN, 'NEW', END, '', '## 내 생각', '내 글', '',
+  ].join('\n'));
+  // without owned keys the frontmatter is left alone (as before)
+  assert.ok(mergeManaged(existing, fresh).text.startsWith('---\ncitekey: "x"\n# my comment\nsummary: "요약 없음"\n'));
+});
+
+test('mergeManaged: unparsable frontmatter is left untouched, the managed block still updates', () => {
+  const fresh = `---\ncitekey: "x"\nsummary: "[[@x 요약]]"\n---\n${BEGIN}\nNEW\n${END}\n`;
+  for (const head of ['---\ncitekey: "x"\nsummary: "요약 없음"\n', 'no frontmatter\n', '']) {
+    const existing = `${head}${BEGIN}\nOLD\n${END}\ntail`;
+    assert.equal(mergeManaged(existing, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text, `${head}${BEGIN}\nNEW\n${END}\ntail`, head);
+  }
+  // CRLF frontmatter keeps its line endings
+  const crlf = `---\r\ncitekey: "x"\r\nsummary: "요약 없음"\r\nmine: 1\r\n---\r\n${BEGIN}\nOLD\n${END}\n`;
+  assert.equal(mergeManaged(crlf, fresh, { ownedKeys: PAPER_OWNED_KEYS }).text,
+    `---\r\ncitekey: "x"\r\nsummary: "[[@x 요약]]"\r\nmine: 1\r\n---\r\n${BEGIN}\nNEW\n${END}\n`);
+});
+
+test('writeNotes + builders: re-export updates owned keys (summary link, keywords) and keeps user keys', async () => {
+  const { root, vault } = await tmpVault();
+  const notesFor = (dg) => {
+    const list = [{ folder: 'Papers', fileName: paperNoteFileName(source), managed: paper({ digest: dg }), ownedKeys: PAPER_OWNED_KEYS }];
+    if (dg) list.push({ folder: 'Summaries', fileName: summaryNoteFileName(source), managed: summary({ digest: dg }), userSection: '', ownedKeys: SUMMARY_OWNED_KEYS });
+    return list;
+  };
+  await writeNotes({ vault, notes: notesFor(null) });
+  const pfile = path.join(vault, 'Papers', '@KimEtAlX2025.md');
+  assert.ok((await fs.readFile(pfile, 'utf8')).includes('summary: "요약 없음"\n'));
+  await fs.writeFile(pfile, (await fs.readFile(pfile, 'utf8')).replace('tags: [paper]\n', 'tags: [paper, todo]\nstatus: reading\nprojects:\n  - 졸업논문\n'));
+  await writeNotes({ vault, notes: notesFor(digest) });
+  const ptext = await fs.readFile(pfile, 'utf8');
+  assert.ok(ptext.includes('summary: "[[@KimEtAlX2025 요약]]"\ntags: [paper, todo]\nstatus: reading\nprojects:\n  - 졸업논문\n---\n'), ptext.slice(0, 600));
+  const sfile = path.join(vault, 'Summaries', '@KimEtAlX2025 요약.md');
+  await fs.writeFile(sfile, (await fs.readFile(sfile, 'utf8')).replace('tags: [paper-summary]\n', 'tags: [paper-summary, 검토]\nmine: 1\n'));
+  await writeNotes({ vault, notes: notesFor({ ...digest, keywords: ['GPU', 'Kubernetes', 'AIOps'] }) });
+  const stext = await fs.readFile(sfile, 'utf8');
+  assert.ok(stext.startsWith('---\ncitekey: "KimEtAlX2025"\npaper: "[[@KimEtAlX2025]]"\nkeywords: ["GPU", "Kubernetes", "AIOps"]\ntags: [paper-summary, 검토]\nmine: 1\n---\n'), stext.slice(0, 300));
+  assert.ok(stext.includes('키워드: [[GPU]] · [[Kubernetes]] · [[AIOps]]'));
+  await fs.rm(root, { recursive: true, force: true });
+});
+
 test('mergeManaged: missing, duplicated or reversed markers → error, no text', () => {
   for (const existing of [
     'no markers',
@@ -434,6 +513,7 @@ test('validateObsidianSettings checks vault, folder and research note', async ()
   await fs.writeFile(path.join(vault, 'Notes', '연구.md'), '# 연구');
   await fs.writeFile(path.join(root, 'out.md'), '');
   await fs.symlink(path.join(root, 'out.md'), path.join(vault, 'escape.md'));
+  assert.equal(DEFAULT_FOLDER, 'Papers');
   assert.equal(DEFAULT_SUMMARY_FOLDER, 'Summaries');
   assert.deepEqual(await validateObsidianSettings({ vault }), { vault, folder: DEFAULT_FOLDER, summaryFolder: 'Summaries', researchNote: null });
   assert.deepEqual(await validateObsidianSettings({ vault: `${vault}/`, folder: 'A/B/', summaryFolder: 'S/T/', researchNote: 'Notes/연구.md' }),
@@ -453,7 +533,7 @@ test('validateObsidianSettings checks vault, folder and research note', async ()
 
 test('settings: obsidian survives saves of other fields and vice versa', async () => {
   const d = await fs.mkdtemp(path.join(os.tmpdir(), 'pr-set-'));
-  const obsidian = { vault: '/v', folder: 'Notes/Papers', researchNote: 'Notes/r.md' };
+  const obsidian = { vault: '/v', folder: 'Papers', researchNote: 'Notes/r.md' };
   await writeSettings(d, { obsidian });
   await writeSettings(d, { agent: 'codex' });
   await writeSettings(d, { folders: [] });

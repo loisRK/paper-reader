@@ -35,7 +35,7 @@ export function noteOptions(notes) {
 // Response of POST /api/papers/:id/obsidian: { paperNote, summaryNote (null without a summary) }.
 export const exportMessage = (r) => `Obsidian에 저장했습니다: ${r?.paperNote ?? ''}${r?.summaryNote ? ` · ${r.summaryNote}` : ''}`;
 
-export const DEFAULT_FOLDER = 'Notes/Papers';
+export const DEFAULT_FOLDER = 'Papers';
 export const DEFAULT_SUMMARY_FOLDER = 'Summaries';
 
 // Pure: PUT body from the current settings plus one change, so saving one field never resets the others.

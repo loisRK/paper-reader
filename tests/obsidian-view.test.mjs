@@ -47,6 +47,7 @@ test('settingsBody keeps every folder when one field changes; a new vault clears
   assert.deepEqual(settingsBody(s, { vault: '/w', folder: 'Papers', summaryFolder: 'AI/Sum' }), { vault: '/w', folder: 'Papers', summaryFolder: 'AI/Sum', researchNote: null });
   // settings loaded before summaryFolder existed
   assert.deepEqual(settingsBody({ vault: '/v', folder: 'Papers', researchNote: null }, { researchNote: 'x.md' }), { vault: '/v', folder: 'Papers', summaryFolder: 'Summaries', researchNote: 'x.md' });
+  assert.deepEqual(settingsBody({ vault: '/v' }, { researchNote: null }), { vault: '/v', folder: 'Papers', summaryFolder: 'Summaries', researchNote: null });
 });
 
 test('jobView: connections jobs get their own texts (never "요약")', () => {

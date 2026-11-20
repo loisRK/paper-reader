@@ -7,6 +7,9 @@ export const BEGIN = '%% begin paper-reader %%';
 export const END = '%% end paper-reader %%';
 export const MARKER_ERROR = 'paper-reader 표시가 깨져 있어 덮어쓰지 않았습니다. 표시를 고치거나 파일을 옮긴 뒤 다시 보내세요.';
 export const USER_SECTION = '## 내 생각\n\n';
+// Frontmatter keys the app rewrites on every export; every other key (tags included) is the user's after creation.
+export const PAPER_OWNED_KEYS = ['citekey', 'title', 'authors', 'year', 'doi', 'zotero', 'summary'];
+export const SUMMARY_OWNED_KEYS = ['citekey', 'paper', 'keywords'];
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
@@ -334,12 +337,74 @@ export function buildSummaryNote({ source, digest, connections, researchNoteName
 
 const count = (s, sub) => s.split(sub).length - 1;
 
+// ---------- frontmatter ----------
+
+const KEY_LINE = /^([A-Za-z_][\w-]*):(?:[ \t]|$)/;
+
+// Leading `---` block of `text`: { eol, start, end, lines } (lines between the fences, without EOLs), or null.
+function frontmatter(text) {
+  const m = /^---(\r?\n)/.exec(text);
+  if (!m) return null;
+  const eol = m[1];
+  const lines = [];
+  let pos = m[0].length;
+  while (pos < text.length) {
+    const nl = text.indexOf('\n', pos);
+    const next = nl < 0 ? text.length : nl + 1;
+    const line = text.slice(pos, nl < 0 ? text.length : nl).replace(/\r$/, '');
+    if (line === '---' || line === '...') return { eol, start: m[0].length, end: pos, lines };
+    lines.push(line);
+    pos = next;
+  }
+  return null;
+}
+
+// Top-level entries: a `key:` line plus its indented / `- ` continuation lines. Other lines stand alone.
+function entries(lines) {
+  const out = [];
+  for (const line of lines) {
+    const k = KEY_LINE.exec(line);
+    const prev = out.at(-1);
+    if (k) out.push({ key: k[1], lines: [line] });
+    else if (prev?.key && line !== '' && (/^[ \t]/.test(line) || line.startsWith('- '))) prev.lines.push(line);
+    else out.push({ key: null, lines: [line] });
+  }
+  return out;
+}
+
+/**
+ * Rewrites the owned keys of `head` (the text before BEGIN) with their lines from `fresh` (the new frontmatter):
+ * replaced in place, missing ones appended at the end of the block. Everything else stays byte-identical.
+ * No parsable frontmatter in either → `head` unchanged.
+ */
+function mergeFrontmatter(head, fresh, ownedKeys) {
+  if (!ownedKeys.length) return head;
+  const old = frontmatter(head);
+  const neu = frontmatter(fresh);
+  if (!old || !neu) return head;
+  const want = new Map(entries(neu.lines).filter((e) => e.key && ownedKeys.includes(e.key)).map((e) => [e.key, e.lines]));
+  const done = new Set();
+  const lines = [];
+  for (const e of entries(old.lines)) {
+    if (e.key && want.has(e.key)) {
+      if (!done.has(e.key)) lines.push(...want.get(e.key));
+      done.add(e.key);
+    } else {
+      lines.push(...e.lines);
+    }
+  }
+  for (const [k, v] of want) if (!done.has(k)) lines.push(...v);
+  const body = lines.map((l) => `${l}${old.eol}`).join('');
+  return head.slice(0, old.start) + body + head.slice(old.end);
+}
+
 /**
  * new file (existing === null) → managed + the user section ('' for summary notes: markers only).
- * existing file → only BEGIN…END is replaced; every byte outside stays as it was.
+ * existing file → BEGIN…END is replaced, and the frontmatter lines of `ownedKeys` are rewritten;
+ * every other byte outside stays as it was.
  * Missing, repeated or reversed markers → { error } (never overwrite).
  */
-export function mergeManaged(existing, managed, { userSection = USER_SECTION } = {}) {
+export function mergeManaged(existing, managed, { userSection = USER_SECTION, ownedKeys = [] } = {}) {
   const mb = managed.indexOf(BEGIN);
   const me = managed.indexOf(END);
   if (mb < 0 || me < mb) throw new Error('managed 텍스트에 paper-reader 표시가 없습니다.');
@@ -352,5 +417,6 @@ export function mergeManaged(existing, managed, { userSection = USER_SECTION } =
   const e = existing.indexOf(END);
   if (e < b) return { error: MARKER_ERROR };
   const block = managed.slice(mb, me + END.length);
-  return { text: existing.slice(0, b) + block + existing.slice(e + END.length) };
+  const head = mergeFrontmatter(existing.slice(0, b), managed.slice(0, mb), ownedKeys);
+  return { text: head + block + existing.slice(e + END.length) };
 }

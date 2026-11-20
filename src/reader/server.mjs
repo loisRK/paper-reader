@@ -17,7 +17,9 @@ import { createExtractJob } from '../library/extract-job.mjs';
 import { createDigestJobs } from '../agent/digest-job.mjs';
 import { readConnectionsFile, editConnectionItem, deleteConnectionItem } from '../agent/connections.mjs';
 import { readNotes } from '../notes/store.mjs';
-import { buildPaperNote, buildSummaryNote, paperNoteFileName, summaryNoteFileName, researchHeadings } from '../obsidian/note.mjs';
+import {
+  buildPaperNote, buildSummaryNote, paperNoteFileName, summaryNoteFileName, researchHeadings, PAPER_OWNED_KEYS, SUMMARY_OWNED_KEYS,
+} from '../obsidian/note.mjs';
 import { writeNotes, listVaultNotes, readVaultNote, resolveVault } from '../obsidian/write.mjs';
 import { validateObsidianSettings, DEFAULT_FOLDER, DEFAULT_SUMMARY_FOLDER } from '../obsidian/settings.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
@@ -334,12 +336,12 @@ export function createServer(cfg, deps = {}) {
     const now = new Date();
     // Two notes per paper: what I marked/wrote (paper note) and what the AI made (summary note, only with a digest).
     const list = [{
-      folder: o.folder || DEFAULT_FOLDER, fileName: paperNoteFileName(b.source),
+      folder: o.folder || DEFAULT_FOLDER, fileName: paperNoteFileName(b.source), ownedKeys: PAPER_OWNED_KEYS,
       managed: buildPaperNote({ source: b.source, digest, notes, citekey, now, hasSummary: Boolean(digest) }),
     }];
     if (digest) {
       list.push({
-        folder: o.summaryFolder || DEFAULT_SUMMARY_FOLDER, fileName: summaryNoteFileName(b.source), userSection: '',
+        folder: o.summaryFolder || DEFAULT_SUMMARY_FOLDER, fileName: summaryNoteFileName(b.source), userSection: '', ownedKeys: SUMMARY_OWNED_KEYS,
         managed: buildSummaryNote({ source: b.source, digest, connections, researchNoteName, citekey, now, researchHeadings: headings }),
       });
     }

@@ -1068,7 +1068,7 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   const send = (method, p, body, headers = { 'content-type': 'application/json' }) => fetch(b + p, { method, headers, body: JSON.stringify(body) });
 
   // nothing set yet
-  assert.deepEqual(await (await fetch(`${b}/api/obsidian/settings`)).json(), { vault: '', folder: 'Notes/Papers', summaryFolder: 'Summaries', researchNote: null, vaultOk: false });
+  assert.deepEqual(await (await fetch(`${b}/api/obsidian/settings`)).json(), { vault: '', folder: 'Papers', summaryFolder: 'Summaries', researchNote: null, vaultOk: false });
   const unset = await send('POST', '/api/papers/z1/obsidian', {});
   assert.equal(unset.status, 400);
   assert.equal((await unset.json()).error, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
@@ -1079,9 +1079,9 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: '../x' })).status, 400);
   assert.equal((await send('PUT', '/api/obsidian/settings', { vault, summaryFolder: '../x' })).status, 400);
   assert.equal((await send('PUT', '/api/obsidian/settings', { vault, researchNote: 'Notes/없음.md' })).status, 400);
-  const ok = await send('PUT', '/api/obsidian/settings', { vault, folder: 'Notes/Papers', researchNote: 'Notes/연구 주제.md' });
+  const ok = await send('PUT', '/api/obsidian/settings', { vault, researchNote: 'Notes/연구 주제.md' });
   assert.equal(ok.status, 200);
-  assert.deepEqual(await ok.json(), { vault, folder: 'Notes/Papers', summaryFolder: 'Summaries', researchNote: 'Notes/연구 주제.md', vaultOk: true });
+  assert.deepEqual(await ok.json(), { vault, folder: 'Papers', summaryFolder: 'Summaries', researchNote: 'Notes/연구 주제.md', vaultOk: true });
 
   assert.deepEqual(await (await fetch(`${b}/api/obsidian/notes`)).json(), { notes: ['Notes/연구 주제.md'], truncated: false });
 
@@ -1090,10 +1090,10 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.equal((await fetch(`${b}/api/papers/z1/obsidian`)).status, 404);
   const r = await send('POST', '/api/papers/z1/obsidian', {});
   assert.equal(r.status, 200);
-  assert.deepEqual(await r.json(), { paperNote: 'Notes/Papers/@z1.md', summaryNote: 'Summaries/@z1 요약.md' });
+  assert.deepEqual(await r.json(), { paperNote: 'Papers/@z1.md', summaryNote: 'Summaries/@z1 요약.md' });
   // paper and summary notes never show up as research-note candidates
   assert.deepEqual(await (await fetch(`${b}/api/obsidian/notes`)).json(), { notes: ['Notes/연구 주제.md'], truncated: false });
-  const pfile = path.join(vault, 'Notes/Papers/@z1.md');
+  const pfile = path.join(vault, 'Papers/@z1.md');
   const file = path.join(vault, 'Summaries/@z1 요약.md');
   const ptext = await fs.readFile(pfile, 'utf8');
   assert.ok(ptext.includes('summary: "[[@z1 요약]]"'));
@@ -1107,17 +1107,19 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.ok(text.includes('AI 연결점 — [[연구 주제#축 A]]'));
   assert.ok(!text.includes('내 메모') && !text.includes('## 내 생각'));
   // re-send (e.g. after regenerating the summary) keeps what I wrote in both notes
-  await fs.writeFile(pfile, `${ptext}내 글\n`);
+  await fs.writeFile(pfile, `${ptext.replace('tags: [paper]\n', 'tags: [paper]\nstatus: reading\n')}내 글\n`);
   await fs.writeFile(file, `${text}요약 밖 메모\n`);
   await fs.writeFile(path.join(out, 'z1', 'digest.json'), JSON.stringify({ ...fullDigest({ paperId: 'z1' }), keywords: ['GPU', 'Kubernetes', 'AIOps'] }));
   assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
   assert.ok((await fs.readFile(pfile, 'utf8')).endsWith('## 내 생각\n\n내 글\n'));
+  assert.ok((await fs.readFile(pfile, 'utf8')).includes('tags: [paper]\nstatus: reading\n---\n'));
   const resent = await fs.readFile(file, 'utf8');
   assert.ok(resent.includes('키워드: [[GPU]] · [[Kubernetes]] · [[AIOps]]') && resent.endsWith('요약 밖 메모\n'), resent);
+  assert.ok(resent.includes('keywords: ["GPU", "Kubernetes", "AIOps"]\n'), resent);
   // connections keep pointing at the note they were made with, even after the setting changes
   await fs.writeFile(path.join(out, 'z1', 'connections.json'), JSON.stringify({ version: 1, researchNote: 'Notes/연구 주제.md', items: [{ id: 'k1', target: '축 A', text: '연결.', evidence: ['p1-s1'] }] }));
   await fs.writeFile(path.join(vault, 'Notes', 'Other.md'), '# Other\n## 관심 영역\n');
-  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: 'Notes/Papers', researchNote: 'Notes/Other.md' })).status, 200);
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: 'Papers', researchNote: 'Notes/Other.md' })).status, 200);
   assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
   const switched = await fs.readFile(file, 'utf8');
   assert.ok(switched.includes('AI 연결점 — [[연구 주제#축 A]]'), switched);
@@ -1158,13 +1160,13 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   assert.ok((await fs.readFile(file, 'utf8')).includes('연결 메모를 아직 만들지 않았습니다.'));
 
   // folder paper without Zotero and without digest → paper note only; example paper
-  assert.deepEqual(await (await send('POST', '/api/papers/f1/obsidian', {})).json(), { paperNote: 'Notes/Papers/f1.md', summaryNote: null });
-  const f1 = await fs.readFile(path.join(vault, 'Notes/Papers/f1.md'), 'utf8');
+  assert.deepEqual(await (await send('POST', '/api/papers/f1/obsidian', {})).json(), { paperNote: 'Papers/f1.md', summaryNote: null });
+  const f1 = await fs.readFile(path.join(vault, 'Papers/f1.md'), 'utf8');
   assert.ok(!f1.includes('[[@') && f1.includes('\n> 요약 없음\n'), f1);
   await assert.rejects(fs.access(path.join(vault, 'Summaries/f1 요약.md')));
   // a custom summary folder is used for the next export
-  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: 'Notes/Papers', summaryFolder: 'AI/Sum', researchNote: null })).status, 200);
-  assert.deepEqual(await (await send('POST', '/api/papers/e1/obsidian', {})).json(), { paperNote: 'Notes/Papers/e1.md', summaryNote: 'AI/Sum/e1 요약.md' });
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: 'Papers', summaryFolder: 'AI/Sum', researchNote: null })).status, 200);
+  assert.deepEqual(await (await send('POST', '/api/papers/e1/obsidian', {})).json(), { paperNote: 'Papers/e1.md', summaryNote: 'AI/Sum/e1 요약.md' });
   assert.deepEqual(await (await fetch(`${b}/api/obsidian/notes`)).json(), { notes: ['Notes/이동.md', 'Notes/Other.md', 'Summaries/@z1 요약.md'].sort((x, y) => x.localeCompare(y)), truncated: false });
   assert.equal((await send('POST', '/api/papers/nope/obsidian', {})).status, 404);
 
