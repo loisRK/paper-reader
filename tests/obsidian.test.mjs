@@ -138,8 +138,8 @@ test('companion note: connections absent vs present (missing heading flagged)', 
   };
   const md = build({ connections, researchHeadings: ['축 A', '축 B'] });
   const sec = md.slice(md.indexOf('## 연구 연결 메모'));
-  assert.ok(sec.includes('> [!note] GPU 관리와 이어진다. — 연결 대상: [[연구 주제#축 A]]\n> 근거: "First sentence." (p.1)\n> 근거: "Page two more." (p.2)\n'), sec);
-  assert.ok(sec.includes('> [!note] 연결 둘. — 연결 대상: 사라진 제목 (연구 노트에서 제목을 찾지 못함)\n> 근거: "Page three." (p.3)\n'), sec);
+  assert.ok(sec.includes('> [!note] AI 연결점 — [[연구 주제#축 A]]\n> GPU 관리와 이어진다.\n> 근거: "First sentence." (p.1)\n> 근거: "Page two more." (p.2)\n'), sec);
+  assert.ok(sec.includes('> [!note] AI 연결점 — 사라진 제목 (연구 노트에서 제목을 찾지 못함)\n> 연결 둘.\n> 근거: "Page three." (p.3)\n'), sec);
   assert.ok(!sec.includes('아직 만들지 않았습니다'));
   // generated but nothing related: say so instead of "not created yet"
   const none = build({ connections: { version: 1, items: [] } });
@@ -330,4 +330,13 @@ test('settings: obsidian survives saves of other fields and vice versa', async (
   assert.equal((await readSettings(d)).agent, 'codex');
   await assert.rejects(writeSettings(d, { obsidian: { vault: 3 } }), { status: 400 });
   await fs.rm(d, { recursive: true, force: true });
+});
+
+test('companion note: %% runs never leave a comment opener', () => {
+  for (const raw of ['a %% b', 'a %%% b', 'a %%%% b', '%%%%%']) {
+    const md = build({ connections: { version: 1, items: [{ id: 'k', target: 'T', text: raw, evidence: [] }] } });
+    const sec = md.slice(md.indexOf('## 연구 연결 메모'));
+    const line = sec.split('\n').find((l) => l.startsWith('> ') && !l.startsWith('> [!'));
+    assert.ok(!line.includes('%%'), `${raw} -> ${line}`);
+  }
 });

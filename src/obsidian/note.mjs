@@ -30,7 +30,7 @@ export function signalOf(color) {
 
 const str = (v) => (typeof v === 'string' ? v : '');
 // `%%` would open an Obsidian comment or forge a marker, so it never reaches the note as-is.
-const noMarks = (s) => s.replace(/%%/g, '% %');
+const noMarks = (s) => s.replace(/%(?=%)/g, '% ');
 const inline = (v) => noMarks(str(v).replace(/\s+/g, ' ').trim());
 // A paragraph line must not turn into a heading, quote or list by accident.
 const para = (v) => inline(v).replace(/^([#>|+*-])/, '\\$1');
@@ -236,7 +236,7 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
     const where = !found ? `${target} (연구 노트에서 제목을 찾지 못함)`
       : noteName ? `[[${noteName}#${linkPart(target)}]]` : target;
     const ev = known(sentences, it?.evidence);
-    L.push(`> [!note] ${inline(it?.text)} — 연결 대상: ${where}`, ...quoteLines(sentences, ev, '> 근거: '), '');
+    L.push(`> [!note] AI 연결점 — ${where}`, `> ${inline(it?.text)}`, ...quoteLines(sentences, ev, '> 근거: '), '');
   }
   if (L.at(-1) === '') L.pop();
   L.push(END);

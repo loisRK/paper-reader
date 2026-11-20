@@ -1094,12 +1094,26 @@ test('obsidian API: settings validation, note list, export to the vault (never o
   const text = await fs.readFile(file, 'utf8');
   assert.ok(text.includes('[[@z1]]'));
   assert.ok(text.includes('> [!paper-red] 🔴 멈춰서 생각 · p.1\n> b\n>\n> **내 메모:** 중요'));
-  assert.ok(text.includes('연결 대상: [[연구 주제#축 A]]'));
+  assert.ok(text.includes('AI 연결점 — [[연구 주제#축 A]]'));
   assert.ok(text.endsWith('## 내 생각\n\n'));
   // re-send keeps the user section
   await fs.writeFile(file, `${text}내 글\n`);
   assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
   assert.ok((await fs.readFile(file, 'utf8')).endsWith('## 내 생각\n\n내 글\n'));
+  // connections keep pointing at the note they were made with, even after the setting changes
+  await fs.writeFile(path.join(out, 'z1', 'connections.json'), JSON.stringify({ version: 1, researchNote: 'Notes/연구 주제.md', items: [{ id: 'k1', target: '축 A', text: '연결.', evidence: ['p1-s1'] }] }));
+  await fs.writeFile(path.join(vault, 'Notes', 'Other.md'), '# Other\n## 관심 영역\n');
+  assert.equal((await send('PUT', '/api/obsidian/settings', { vault, folder: 'Notes/Papers', researchNote: 'Notes/Other.md' })).status, 200);
+  assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
+  const switched = await fs.readFile(file, 'utf8');
+  assert.ok(switched.includes('AI 연결점 — [[연구 주제#축 A]]'), switched);
+  assert.ok(!switched.includes('Other#') && !switched.includes('제목을 찾지 못함'), switched);
+  // stored note gone: keep the name, flag the item
+  await fs.rename(path.join(vault, 'Notes', '연구 주제.md'), path.join(vault, 'Notes', '이동.md'));
+  assert.equal((await send('POST', '/api/papers/z1/obsidian', {})).status, 200);
+  const moved = await fs.readFile(file, 'utf8');
+  assert.ok(moved.includes('AI 연결점 — 축 A (연구 노트에서 제목을 찾지 못함)'), moved);
+  assert.ok(!moved.includes('Other#'), moved);
   // broken markers → 409, file untouched
   await fs.writeFile(file, 'broken');
   const broken = await send('POST', '/api/papers/z1/obsidian', {});

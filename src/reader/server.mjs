@@ -320,9 +320,11 @@ export function createServer(cfg, deps = {}) {
     const connections = digest ? await readConnections(id) : null;
     let headings = null;
     let researchNoteName = null;
-    if (o.researchNote) {
-      researchNoteName = path.posix.basename(o.researchNote).replace(/\.md$/i, '');
-      try { headings = researchHeadings(await readVaultNote(o.vault, o.researchNote)); } catch { headings = []; }
+    // Links and heading checks follow the note the connections were generated against, not today's setting.
+    const noteRel = typeof connections?.researchNote === 'string' && connections.researchNote ? connections.researchNote : o.researchNote;
+    if (noteRel) {
+      researchNoteName = path.posix.basename(noteRel).replace(/\.md$/i, '');
+      try { headings = researchHeadings(await readVaultNote(o.vault, noteRel)); } catch { headings = []; }
     }
     const citekey = b.source.zotero?.itemKey ? b.source.id : null;
     const managed = buildCompanionNote({
