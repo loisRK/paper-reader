@@ -3,6 +3,8 @@ import { setupNotes } from './notes.js';
 import { setupCardMemos } from './card-memos.js';
 import { createPdfView } from './pdf-view.js';
 import { jobView, watchJob } from './digest.js';
+import { exportButton } from './obsidian.js';
+import { setupConnections } from './connections.js';
 
 const SECTION_LABELS = {
   motivation: '동기', gap: '빈틈(Gap)', idea: '아이디어', method: '방법', setup: '실험 설정',
@@ -654,6 +656,7 @@ export function render(container, data, actions) {
       }
     });
     if (memos) flow.append(memos.oldNode);
+    if (conn) flow.append(conn.node); // not a .card: no reading progress, no card focus
     if ('IntersectionObserver' in window) {
       observer = new IntersectionObserver((entries) => {
         const hit = entries.find((e) => e.isIntersecting);
@@ -700,6 +703,25 @@ export function render(container, data, actions) {
     : null;
   const notesStatus = notesCtl?.statusNode ?? null;
 
+  const exporter = actions.exportObsidian ? exportButton({ id: data.id, actions }) : null;
+  const conn = actions.connections
+    ? setupConnections({
+      id: data.id, actions, example: data.example === true, hasDigest: !!digest && cards.length > 0, onEvidence: (ids) => showEvidence(ids),
+    })
+    : null;
+  let disposed = false;
+  if (actions.obsidianSettings && (exporter || conn)) {
+    actions.obsidianSettings().then((s) => {
+      if (disposed) return;
+      exporter?.setSettings(s);
+      conn?.setSettings(s);
+    }, () => {
+      if (disposed) return;
+      exporter?.setSettings(null);
+      conn?.setSettings(null);
+    });
+  }
+
   const topbar = el('header', { class: 'topbar' },
     el('div', { class: 'topbar-row' },
       el('a', { class: 'back', href: '#/', text: '← 목록' }),
@@ -707,6 +729,7 @@ export function render(container, data, actions) {
       cards.length ? progressSlot : null,
       cards.length ? el('div', { class: 'controls' }, modeGroup, focusBtn) : null,
       digest ? dj.button : null,
+      exporter?.button ?? null,
       el('button', { type: 'button', class: 'btn btn-quiet sheet-open', 'aria-controls': 'source-panel', text: '원문 보기', onclick: () => setSheet(true) }),
     ),
     digest ? dj.box : null,
@@ -729,8 +752,10 @@ export function render(container, data, actions) {
   const onKey = (e) => { if (e.key === 'Escape') setSheet(false); };
   document.addEventListener('keydown', onKey);
   return () => {
+    disposed = true;
     observer?.disconnect();
     dj.dispose();
+    conn?.dispose();
     pdf.view?.dispose();
     memos?.dispose();
     notesCtl?.dispose();

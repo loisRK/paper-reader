@@ -1,5 +1,6 @@
 import { el, clear, setChildren, progressBar } from './dom.js';
 import { jobView, lastLogLine, watchJob } from './digest.js';
+import { obsidianSection } from './obsidian.js';
 
 export const FOLDER_PREVIEW = 50;
 
@@ -408,6 +409,7 @@ export function render(container, data, actions) {
     el('h1', { class: 'side-title', tabindex: -1, text: 'Paper Reader' }),
     folderSection(folders, actions, data.hashing),
     agentPicker(actions),
+    obsidianSection(actions),
     el('section', { class: 'side-section', 'aria-labelledby': 'h-searches' },
       el('h2', { class: 'side-label', id: 'h-searches', text: '검색 결과' }),
       searches.length

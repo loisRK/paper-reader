@@ -4,20 +4,26 @@ import { createPoller } from './notes.js';
 
 export const POLL_MS = 2000;
 const FAIL_PREFIX = '요약을 만들지 못했습니다';
+// Per-kind words; job.kind is 'digest' (default) or 'connections'.
+const KIND_TEXT = {
+  digest: { writing: '요약 쓰는 중…', done: '요약을 만들었습니다', fail: FAIL_PREFIX },
+  connections: { writing: '연결 메모 쓰는 중…', done: '연구 연결 메모를 만들었습니다', fail: '연결 메모를 만들지 못했습니다' },
+};
 
-// Pure: what a digest job looks like on screen. null when there is nothing to show.
+// Pure: what a job (digest or connections) looks like on screen. null when there is nothing to show.
 export function jobView(job) {
   if (!job) return null;
+  const k = KIND_TEXT[job.kind] ?? KIND_TEXT.digest;
   const max = job.maxAttempts ?? 3;
   switch (job.state) {
     case 'extracting': return { text: 'PDF 추출 중…', busy: true, tone: 'info' };
-    case 'writing': return { text: `요약 쓰는 중… (${job.attempt}/${max}번째)`, busy: true, tone: 'info' };
+    case 'writing': return { text: `${k.writing} (${job.attempt}/${max}번째)`, busy: true, tone: 'info' };
     case 'checking': return { text: '검증 중…', busy: true, tone: 'info' };
     case 'retrying': return { text: `검증 문제 ${job.problems?.length ?? 0}건 — 다시 쓰는 중 (${job.attempt}/${max}번째)`, busy: true, tone: 'info' };
-    case 'done': return job.existing && job.message ? { text: job.message, busy: false, tone: 'info' } : { text: '요약을 만들었습니다', busy: false, tone: 'ok' };
+    case 'done': return job.existing && job.message ? { text: job.message, busy: false, tone: 'info' } : { text: k.done, busy: false, tone: 'ok' };
     case 'failed': {
       const m = job.message?.trim();
-      const text = !m ? FAIL_PREFIX : m.startsWith(FAIL_PREFIX) ? m : `${FAIL_PREFIX}: ${m}`;
+      const text = !m ? k.fail : m.startsWith(k.fail) ? m : `${k.fail}: ${m}`;
       return { text, busy: false, tone: 'error' };
     }
     case 'cancelled': return { text: '취소했습니다', busy: false, tone: 'info' };
@@ -56,13 +62,13 @@ export function logDetails(job, open = false) {
 }
 
 // Polls one paper's job every POLL_MS until it is no longer running; onUpdate(job|null) on every fetch.
-// Network errors are skipped (the next tick retries).
-export function watchJob({ id, actions, onUpdate, ms = POLL_MS }) {
+// Network errors are skipped (the next tick retries). `get` defaults to the digest job.
+export function watchJob({ id, actions, onUpdate, ms = POLL_MS, get = (x) => actions.digestJob(x) }) {
   const poller = createPoller({
     ms,
     async run() {
       let job;
-      try { job = await actions.digestJob(id); } catch { return; }
+      try { job = await get(id); } catch { return; }
       if (!jobView(job)?.busy) poller.stop();
       onUpdate(job);
     },

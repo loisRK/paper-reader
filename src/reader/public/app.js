@@ -60,6 +60,25 @@ const actions = {
     }
   },
   digestTracker: digestTracker(sessionStore()),
+  // ---- Obsidian + research connection notes ----
+  obsidianSettings: () => api('/api/obsidian/settings'),
+  saveObsidianSettings: (body) => api('/api/obsidian/settings', sendJson('PUT', body)),
+  obsidianNotes: () => api('/api/obsidian/notes'),
+  exportObsidian: (id) => api(`/api/papers/${encodeURIComponent(id)}/obsidian`, sendJson('POST', {})),
+  connections: (id) => api(`/api/papers/${encodeURIComponent(id)}/connections`),
+  startConnections: (id) => api(`/api/papers/${encodeURIComponent(id)}/connections`, sendJson('POST', {})),
+  cancelConnections: (id) => api(`/api/papers/${encodeURIComponent(id)}/connections-job/cancel`, sendJson('POST', {})),
+  // null when the server has no connections job for this paper (404).
+  async connectionsJob(id) {
+    try {
+      return await api(`/api/papers/${encodeURIComponent(id)}/connections-job`);
+    } catch (err) {
+      if (err.status === 404) return null;
+      throw err;
+    }
+  },
+  editConnection: (id, itemId, text) => api(`/api/papers/${encodeURIComponent(id)}/connections/${encodeURIComponent(itemId)}`, sendJson('PUT', { text })),
+  deleteConnection: (id, itemId) => api(`/api/papers/${encodeURIComponent(id)}/connections/${encodeURIComponent(itemId)}`, { method: 'DELETE' }),
   // Folder settings / extract: throw Error(server message); the list view shows it in the toast.
   saveFolders: (folders) => api('/api/library/folders', sendJson('PUT', { folders })),
   extractPaper: (id) => api('/api/library/extract', sendJson('POST', { id })),

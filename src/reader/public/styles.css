@@ -109,7 +109,7 @@ body.paper-mode #app { max-width: none; padding: 0; }
   position: fixed; left: 50%; bottom: 1.5rem; transform: translate(-50%, 1rem);
   max-width: min(90vw, 36rem); padding: .75rem 1.1rem; border-radius: 12px;
   background: var(--text); color: var(--bg); box-shadow: var(--float-shadow);
-  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50;
+  opacity: 0; pointer-events: none; transition: opacity .2s, transform .2s; z-index: 50; overflow-wrap: anywhere;
 }
 .toast.show { opacity: 1; transform: translate(-50%, 0); }
 
@@ -541,3 +541,60 @@ a.row-title:hover { color: var(--accent); text-decoration: underline; }
 .memo-status { display: block; font-size: .8rem; min-height: 1em; }
 .memo-conflict { margin-bottom: 1rem; }
 .memo-conflict-slot:empty { display: none; }
+
+/* ---------- Obsidian settings (sidebar) ---------- */
+.obs-box, .obs-form, .obs-note { display: grid; gap: .35rem; min-width: 0; }
+.obs-box { gap: .7rem; }
+.obs-box p { margin: 0; }
+.home-side .obs-form .folder-input { font-size: .85rem; min-height: 2rem; background: var(--surface); }
+.obs-form label + .folder-input { margin-bottom: .15rem; }
+.obs-actions { display: flex; justify-content: flex-end; }
+.obs-note .folder-warn, .obs-form .folder-warn { overflow-wrap: anywhere; }
+
+/* ---------- research connection notes (end of the summary flow; not a card) ---------- */
+.conn-section { max-width: 44rem; margin: 2rem auto 0; }
+.conn { background: var(--surface-2); border: 1px dashed var(--line); border-radius: var(--radius); }
+.conn-summary {
+  display: flex; flex-wrap: wrap; align-items: center; gap: .35rem .6rem;
+  padding: .8rem 1.1rem; cursor: pointer; list-style: none; border-radius: var(--radius);
+}
+.conn-summary::-webkit-details-marker { display: none; }
+.conn-summary::before { content: "›"; display: inline-block; width: .8rem; color: var(--muted); transition: transform .15s; }
+.conn[open] > .conn-summary::before { transform: rotate(90deg); }
+.conn-title { margin: 0; font-size: 1rem; }
+.conn-badge {
+  font-size: .75rem; padding: .1rem .55rem; border-radius: 999px;
+  color: var(--muted); border: 1px solid var(--line); background: var(--surface);
+}
+.conn-count { font-size: .8rem; color: var(--muted); margin-left: auto; font-variant-numeric: tabular-nums; }
+.conn-body { padding: 0 1.1rem 1rem; display: grid; gap: .6rem; }
+.conn-body > p { margin: 0; font-size: .9rem; }
+.conn-hint { color: var(--warn-text); background: var(--warn-bg); border-radius: var(--radius-sm); padding: .45rem .7rem; }
+.conn-intro, .conn-note, .conn-empty { color: var(--muted); }
+.conn-other { color: var(--warn-text); }
+.conn-actions { display: flex; flex-wrap: wrap; align-items: center; gap: .4rem .7rem; font-size: .9rem; }
+.conn-status[data-tone="error"] { color: var(--warn-text); }
+.conn-items { list-style: none; margin: 0; padding: 0; display: grid; gap: .6rem; }
+.conn-item { background: var(--surface); border: 1px solid var(--line); border-radius: 12px; padding: .7rem .9rem; display: grid; gap: .35rem; }
+.conn-target { margin: 0; font-size: .8rem; color: var(--muted); overflow-wrap: anywhere; }
+.conn-target-label { font-weight: 600; }
+.conn-text { margin: 0; line-height: 1.65; font-size: .97rem; overflow-wrap: anywhere; }
+.conn-edited {
+  display: inline-block; margin-left: .45rem; font-size: .72rem; padding: 0 .45rem; border-radius: 999px;
+  color: var(--accent-strong); background: var(--accent-soft); vertical-align: middle;
+}
+.conn-item-actions { display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: .4rem; }
+.conn-item-actions .ev-btn { margin-left: 0; margin-right: auto; }
+.conn-confirm-text { font-size: .88rem; color: var(--warn-text); }
+.conn-textarea {
+  width: 100%; font: inherit; font-size: .95rem; line-height: 1.6; padding: .45rem .6rem;
+  border: 1px solid var(--line); border-radius: var(--radius-sm); background: var(--bg); color: var(--text); resize: vertical;
+}
+.conn-textarea:focus-visible { border-color: var(--accent); }
+.conn-charcount { margin-right: auto; font-size: .8rem; color: var(--muted); font-variant-numeric: tabular-nums; }
+.paper.focus .conn-section:not(:focus-within):not(:hover) { opacity: .35; }
+@media (max-width: 600px) {
+  .conn-summary { padding: .7rem .85rem; }
+  .conn-body { padding: 0 .85rem .85rem; }
+  .conn-count { margin-left: 0; }
+}
