@@ -36,11 +36,13 @@ function cleanProfiles(v) {
   return Object.keys(out).length ? out : undefined;
 }
 
-// obsidian: { vault, folder, researchNote } — validated by src/obsidian/settings.mjs before saving.
+// obsidian: { vault, folder, summaryFolder?, researchNote } — validated by src/obsidian/settings.mjs before saving.
+// Settings saved before summaryFolder existed read without it (the server falls back to the default).
 function cleanObsidian(v) {
   if (!isObj(v) || typeof v.vault !== 'string' || !v.vault || typeof v.folder !== 'string') return undefined;
   if (v.researchNote !== null && v.researchNote !== undefined && typeof v.researchNote !== 'string') return undefined;
-  return { vault: v.vault, folder: v.folder, researchNote: v.researchNote || null };
+  if (v.summaryFolder !== undefined && typeof v.summaryFolder !== 'string') return undefined;
+  return { vault: v.vault, folder: v.folder, ...(v.summaryFolder ? { summaryFolder: v.summaryFolder } : {}), researchNote: v.researchNote || null };
 }
 
 export async function readSettings(dataDir) {

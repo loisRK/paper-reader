@@ -1,4 +1,4 @@
-// Writes companion notes into an Obsidian vault. Only `realpath(vault)/<folder>/*.md` is ever written;
+// Writes paper and summary notes into an Obsidian vault. Only `realpath(vault)/<folder>/*.md` is ever written;
 // error messages never carry the vault's absolute path.
 import fs from 'node:fs/promises';
 import path from 'node:path';
@@ -23,7 +23,7 @@ export function sanitizeFileName(name) {
   let base = String(name ?? '').replace(/\.md$/i, '');
   base = base.replace(/[/\\:*?"<>|#^[\]\u0000-\u001f\u007f]/g, '').replace(/\s+/g, ' ').trim().replace(/^\.+/, '').trim();
   base = [...base].slice(0, MAX_NAME - 3).join('').trim();
-  if (!base) throw new ObsidianError(400, '짝 노트 파일 이름을 만들 수 없습니다.');
+  if (!base) throw new ObsidianError(400, '노트 파일 이름을 만들 수 없습니다.');
   return `${base}.md`;
 }
 
@@ -66,21 +66,21 @@ export async function vaultDir(realVault, parts, { create }) {
     try {
       st = await fs.lstat(next);
     } catch (err) {
-      if (err.code !== 'ENOENT') throw new ObsidianError(400, '짝 노트 폴더를 확인하지 못했습니다.');
+      if (err.code !== 'ENOENT') throw new ObsidianError(400, '노트 폴더를 확인하지 못했습니다.');
       if (!create) return null;
-      try { await fs.mkdir(next); } catch (e) { if (e.code !== 'EEXIST') throw new ObsidianError(500, `짝 노트 폴더를 만들지 못했습니다 (${e.code ?? 'error'}).`); }
+      try { await fs.mkdir(next); } catch (e) { if (e.code !== 'EEXIST') throw new ObsidianError(500, `노트 폴더를 만들지 못했습니다 (${e.code ?? 'error'}).`); }
       st = await fs.lstat(next);
     }
     if (st.isSymbolicLink()) {
       let real;
-      try { real = await fs.realpath(next); } catch { throw new ObsidianError(400, '짝 노트 폴더의 링크가 깨져 있습니다.'); }
+      try { real = await fs.realpath(next); } catch { throw new ObsidianError(400, '노트 폴더의 링크가 깨져 있습니다.'); }
       if (!inside(real, realVault)) throw new ObsidianError(400, 'vault 밖을 가리키는 폴더에는 쓰지 않습니다.');
-      if (!(await fs.stat(real)).isDirectory()) throw new ObsidianError(400, '짝 노트 폴더 경로에 파일이 있습니다.');
+      if (!(await fs.stat(real)).isDirectory()) throw new ObsidianError(400, '노트 폴더 경로에 파일이 있습니다.');
       cur = real;
     } else if (st.isDirectory()) {
       cur = next;
     } else {
-      throw new ObsidianError(400, '짝 노트 폴더 경로에 파일이 있습니다.');
+      throw new ObsidianError(400, '노트 폴더 경로에 파일이 있습니다.');
     }
   }
   return cur;
@@ -96,41 +96,69 @@ function serialized(key, fn) {
   return run;
 }
 
-/** Creates or updates `<vault>/<folder>/<fileName>`; only the managed block of an existing file changes. */
-export async function writeCompanionNote({ vault, folder, fileName, managed }) {
+async function readExisting(file) {
+  try {
+    const st = await fs.lstat(file);
+    if (st.isSymbolicLink() || !st.isFile()) throw new ObsidianError(400, '노트 자리에 링크나 폴더가 있어 덮어쓰지 않았습니다.');
+    return await fs.readFile(file, 'utf8');
+  } catch (err) {
+    if (err instanceof ObsidianError) throw err;
+    if (err.code !== 'ENOENT') throw new ObsidianError(500, `노트를 읽지 못했습니다 (${err.code ?? 'error'}).`);
+    return null;
+  }
+}
+
+/**
+ * Creates or updates several notes of one paper together (paper note + summary note):
+ * notes = [{ folder, fileName, managed, userSection? }] → [{ relPath }].
+ * Every note is checked (paths, file slots, markers) before anything is written, so one broken note means
+ * none is written — not even a new folder. Only the managed block of an existing file changes.
+ */
+export async function writeNotes({ vault, notes }) {
   const realVault = await resolveVault(vault);
-  const parts = relativeParts(folder, '짝 노트 폴더');
-  const name = sanitizeFileName(fileName);
-  const dir = await vaultDir(realVault, parts, { create: true });
-  const file = path.join(dir, name);
-  const relPath = [...parts, name].join('/');
-  return serialized(file, async () => {
-    let existing = null;
+  const plan = [];
+  for (const n of notes) {
+    const parts = relativeParts(n.folder, '노트 폴더');
+    const name = sanitizeFileName(n.fileName);
+    const dir = await vaultDir(realVault, parts, { create: false });
+    plan.push({ ...n, parts, name, relPath: [...parts, name].join('/'), key: dir ? path.join(dir, name) : path.join(realVault, ...parts, name) });
+  }
+  const locked = (i, fn) => (i < plan.length ? serialized(plan[i].key, () => locked(i + 1, fn)) : fn());
+  return locked(0, async () => {
+    for (const p of plan) {
+      const dir = await vaultDir(realVault, p.parts, { create: false });
+      const existing = dir ? await readExisting(path.join(dir, p.name)) : null;
+      const merged = mergeManaged(existing, p.managed, p.userSection === undefined ? {} : { userSection: p.userSection });
+      if (merged.error) {
+        const which = plan.length > 1 ? '두 노트 모두' : '노트를';
+        throw new ObsidianError(409, `${p.relPath}의 paper-reader 표시가 깨져 있어 ${which} 쓰지 않았습니다. 표시를 고치거나 파일을 옮긴 뒤 다시 보내세요.`);
+      }
+      p.text = merged.text;
+    }
+    // Temp files first, then renames, so a failure while writing leaves no half-written note.
+    const tmps = [];
     try {
-      const st = await fs.lstat(file);
-      if (st.isSymbolicLink() || !st.isFile()) throw new ObsidianError(400, '짝 노트 자리에 링크나 폴더가 있어 덮어쓰지 않았습니다.');
-      existing = await fs.readFile(file, 'utf8');
+      for (const p of plan) {
+        const dir = await vaultDir(realVault, p.parts, { create: true });
+        const tmp = path.join(dir, `.${crypto.randomBytes(6).toString('hex')}.paper-reader.tmp`);
+        tmps.push(tmp);
+        await fs.writeFile(tmp, p.text, { flag: 'wx' });
+        p.file = path.join(dir, p.name);
+      }
+      for (const [i, p] of plan.entries()) await fs.rename(tmps[i], p.file);
     } catch (err) {
+      await Promise.all(tmps.map((t) => fs.rm(t, { force: true }).catch(() => {})));
       if (err instanceof ObsidianError) throw err;
-      if (err.code !== 'ENOENT') throw new ObsidianError(500, `짝 노트를 읽지 못했습니다 (${err.code ?? 'error'}).`);
+      throw new ObsidianError(500, `노트를 저장하지 못했습니다 (${err.code ?? 'error'}).`);
     }
-    const merged = mergeManaged(existing, managed);
-    if (merged.error) throw new ObsidianError(409, merged.error);
-    const tmp = path.join(dir, `.${crypto.randomBytes(6).toString('hex')}.paper-reader.tmp`);
-    try {
-      await fs.writeFile(tmp, merged.text, { flag: 'wx' });
-      await fs.rename(tmp, file);
-    } catch (err) {
-      await fs.rm(tmp, { force: true }).catch(() => {});
-      throw new ObsidianError(500, `짝 노트를 저장하지 못했습니다 (${err.code ?? 'error'}).`);
-    }
-    return { relPath };
+    return plan.map((p) => ({ relPath: p.relPath }));
   });
 }
 
 /** Vault-relative `.md` paths (sorted), skipping hidden entries (.obsidian, .trash) and symlinks. */
-// `exclude`: a vault-relative folder (the companion-note folder) left out entirely, before the cap.
+// `exclude`: vault-relative folder(s) (paper and summary notes) left out entirely, before the cap.
 export async function listVaultNotes(vault, { max = MAX_NOTES, exclude = null } = {}) {
+  const skip = new Set((Array.isArray(exclude) ? exclude : [exclude]).filter((x) => typeof x === 'string' && x));
   const realVault = await resolveVault(vault);
   const notes = [];
   const queue = [''];
@@ -145,7 +173,7 @@ export async function listVaultNotes(vault, { max = MAX_NOTES, exclude = null } 
     for (const e of entries) {
       if (e.name.startsWith('.') || e.isSymbolicLink()) continue;
       const r = rel ? `${rel}/${e.name}` : e.name;
-      if (e.isDirectory()) { if (r !== exclude) queue.push(r); }
+      if (e.isDirectory()) { if (!skip.has(r)) queue.push(r); }
       else if (e.isFile() && /\.md$/i.test(e.name)) notes.push(r);
     }
   }

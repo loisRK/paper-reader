@@ -17,9 +17,9 @@ import { createExtractJob } from '../library/extract-job.mjs';
 import { createDigestJobs } from '../agent/digest-job.mjs';
 import { readConnectionsFile, editConnectionItem, deleteConnectionItem } from '../agent/connections.mjs';
 import { readNotes } from '../notes/store.mjs';
-import { buildCompanionNote, companionFileName, researchHeadings } from '../obsidian/note.mjs';
-import { writeCompanionNote, listVaultNotes, readVaultNote, resolveVault } from '../obsidian/write.mjs';
-import { validateObsidianSettings, DEFAULT_FOLDER } from '../obsidian/settings.mjs';
+import { buildPaperNote, buildSummaryNote, paperNoteFileName, summaryNoteFileName, researchHeadings } from '../obsidian/note.mjs';
+import { writeNotes, listVaultNotes, readVaultNote, resolveVault } from '../obsidian/write.mjs';
+import { validateObsidianSettings, DEFAULT_FOLDER, DEFAULT_SUMMARY_FOLDER } from '../obsidian/settings.mjs';
 import { isSafeName, resolvePaperDir, listPaperBundles, readPaper, writeProgress, listSearches, readSearch } from './store.mjs';
 
 const PUBLIC_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), 'public');
@@ -292,7 +292,10 @@ export function createServer(cfg, deps = {}) {
     const o = (await savedSettings()).obsidian;
     let vaultOk = false;
     if (o?.vault) { try { await resolveVault(o.vault); vaultOk = true; } catch { vaultOk = false; } }
-    return { vault: o?.vault ?? '', folder: o?.folder ?? DEFAULT_FOLDER, researchNote: o?.researchNote ?? null, vaultOk };
+    return {
+      vault: o?.vault ?? '', folder: o?.folder ?? DEFAULT_FOLDER, summaryFolder: o?.summaryFolder || DEFAULT_SUMMARY_FOLDER,
+      researchNote: o?.researchNote ?? null, vaultOk,
+    };
   }
   async function readConnections(id) {
     let raw;
@@ -328,10 +331,20 @@ export function createServer(cfg, deps = {}) {
       try { headings = researchHeadings(await readVaultNote(o.vault, noteRel)); } catch { headings = []; }
     }
     const citekey = b.source.zotero?.itemKey ? b.source.id : null;
-    const managed = buildCompanionNote({
-      source: b.source, digest, notes, connections, researchNoteName, citekey, now: new Date(), researchHeadings: headings,
-    });
-    return obsidianCall(() => writeCompanionNote({ vault: o.vault, folder: o.folder, fileName: companionFileName(b.source), managed }));
+    const now = new Date();
+    // Two notes per paper: what I marked/wrote (paper note) and what the AI made (summary note, only with a digest).
+    const list = [{
+      folder: o.folder || DEFAULT_FOLDER, fileName: paperNoteFileName(b.source),
+      managed: buildPaperNote({ source: b.source, digest, notes, citekey, now, hasSummary: Boolean(digest) }),
+    }];
+    if (digest) {
+      list.push({
+        folder: o.summaryFolder || DEFAULT_SUMMARY_FOLDER, fileName: summaryNoteFileName(b.source), userSection: '',
+        managed: buildSummaryNote({ source: b.source, digest, connections, researchNoteName, citekey, now, researchHeadings: headings }),
+      });
+    }
+    const written = await obsidianCall(() => writeNotes({ vault: o.vault, notes: list }));
+    return { paperNote: written[0].relPath, summaryNote: written[1]?.relPath ?? null };
   }
   const notesRoutes = createNotesRoutes(cfg, { out, opts, fetchImpl, zotero: deps.zotero }, { HttpError, checkName, readBody, sendJson, validated });
 
@@ -378,7 +391,8 @@ export function createServer(cfg, deps = {}) {
         if (method !== 'GET') throw new HttpError(405, '허용되지 않는 메서드입니다.');
         const o = (await readSettings(dataDir)).obsidian;
         if (!o?.vault) throw new HttpError(400, 'Obsidian 설정에서 vault 폴더를 먼저 지정하세요.');
-        return sendJson(res, 200, await obsidianCall(() => listVaultNotes(o.vault, { exclude: o.folder || DEFAULT_FOLDER })));
+        const exclude = [o.folder || DEFAULT_FOLDER, o.summaryFolder || DEFAULT_SUMMARY_FOLDER];
+        return sendJson(res, 200, await obsidianCall(() => listVaultNotes(o.vault, { exclude })));
       }
       if (method === 'PUT') {
         const body = await readBody(req);

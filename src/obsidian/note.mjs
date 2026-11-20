@@ -1,10 +1,11 @@
-// Obsidian "짝 노트"(companion reading note) — pure builders, no I/O.
-// The app owns only the block between BEGIN and END; everything else in the file is the user's.
+// Obsidian notes per paper — pure builders, no I/O.
+// Paper note (`@citekey.md`): what I marked and wrote. Summary note (`@citekey 요약.md`): what the AI made.
+// The app owns only the block between BEGIN and END; everything else in either file is the user's.
 import { ZOTERO_COLORS } from '../zotero/annotations.mjs';
 
 export const BEGIN = '%% begin paper-reader %%';
 export const END = '%% end paper-reader %%';
-export const MARKER_ERROR = '짝 노트의 paper-reader 표시가 깨져 있어 덮어쓰지 않았습니다. 표시를 고치거나 파일을 옮긴 뒤 다시 보내세요.';
+export const MARKER_ERROR = 'paper-reader 표시가 깨져 있어 덮어쓰지 않았습니다. 표시를 고치거나 파일을 옮긴 뒤 다시 보내세요.';
 export const USER_SECTION = '## 내 생각\n\n';
 
 const SECTION_LABELS = {
@@ -107,80 +108,99 @@ export function researchHeadings(markdown) {
   return out;
 }
 
-/** File name of the companion note: `@<citekey> 읽기 노트.md` for Zotero papers, else `<id> 읽기 노트.md`. */
-export function companionFileName(source) {
-  return source?.zotero?.itemKey ? `@${source.id} 읽기 노트.md` : `${source.id} 읽기 노트.md`;
+/** Paper note file name: `@<citekey>.md` for Zotero papers, else `<id>.md`. */
+export function paperNoteFileName(source) {
+  return `${paperNoteName(source)}.md`;
 }
+
+/** Summary note file name: `@<citekey> 요약.md` for Zotero papers, else `<id> 요약.md`. */
+export function summaryNoteFileName(source) {
+  return `${summaryNoteName(source)}.md`;
+}
+
+// Link targets (file names without .md). Same sanitizing as the file name so the links resolve.
+const paperNoteName = (source) => (source?.zotero?.itemKey ? `@${source.id}` : `${source?.id ?? ''}`);
+const summaryNoteName = (source) => `${paperNoteName(source)} 요약`;
 
 // Obsidian link targets cannot contain these.
 const linkPart = (s) => inline(s).replace(/[[\]|#^]/g, ' ').replace(/\s+/g, ' ').trim();
+// Keyword links name a note file, so file-name characters are dropped too (`TCP/IP` would be a folder path).
+const keywordPart = (s) => linkPart(str(s).normalize('NFC')).replace(/[\\/:*?"<>]/g, ' ').replace(/\s+/g, ' ').trim();
+
+const MAX_KEYWORDS = 6;
+const MAX_KEYWORD_LEN = 40;
 
 /**
- * Builds frontmatter + the managed block (BEGIN…END), ending with "\n".
- * citekey: the Zotero citekey, or null for a paper not in Zotero (no [[@…]] link, no [@…] citation).
- * researchHeadings: current headings of the research note, or null to skip the check.
+ * Keywords for the summary note's [[links]]: digest.keywords, or (older digests without them) the first
+ * glossary terms. Whitespace-normalized and link-safe, so the same term in two papers gives the same link;
+ * duplicates (ignoring case) are dropped.
  */
-export function buildCompanionNote({ source, digest, notes, connections, researchNoteName, citekey, now, researchHeadings: headings = null }) {
-  const sentences = source?.sentences && typeof source.sentences === 'object' ? source.sentences : {};
+export function noteKeywords(digest) {
+  const own = Array.isArray(digest?.keywords) ? digest.keywords : [];
+  const fromGlossary = (Array.isArray(digest?.glossary) ? digest.glossary : []).map((g) => g?.term);
+  const out = [];
+  const seen = new Set();
+  for (const raw of own.some((k) => keywordPart(k)) ? own : fromGlossary) {
+    const k = keywordPart(raw);
+    if (!k || [...k].length > MAX_KEYWORD_LEN || seen.has(k.toLowerCase())) continue;
+    seen.add(k.toLowerCase());
+    out.push(k);
+    if (out.length === MAX_KEYWORDS) break;
+  }
+  return out;
+}
+
+const q = (v) => JSON.stringify(v);
+const stamp = (now) => (now instanceof Date ? now.toISOString() : str(now) || new Date().toISOString());
+const sentencesOf = (source) => (source?.sentences && typeof source.sentences === 'object' ? source.sentences : {});
+const titleOf = (source) => inline(source?.meta?.title) || inline(source?.id);
+function yearOf(meta) {
+  if (Number.isInteger(meta?.year)) return meta.year;
+  const m = /^(\d{4})/.exec(str(meta?.year) || str(meta?.date));
+  return m ? Number(m[1]) : null;
+}
+const zoteroLink = (source) => (source?.zotero?.itemKey ? `zotero://select/library/items/${encodeURIComponent(source.zotero.itemKey)}` : null);
+
+/**
+ * Paper note: what I marked and wrote — highlights (app and Zotero), their memos and card memos.
+ * No summary content. Builds frontmatter + the managed block (BEGIN…END), ending with "\n".
+ * citekey: the Zotero citekey, or null for a paper not in Zotero (no [@…] citation, no Zotero link).
+ * hasSummary: whether a summary note is written next to it (default: a digest exists).
+ */
+export function buildPaperNote({ source, digest, notes, citekey, now, hasSummary = Boolean(digest) }) {
+  const sentences = sentencesOf(source);
   const id = source?.id ?? '';
-  const title = inline(source?.meta?.title) || id;
-  const doi = inline(source?.meta?.doi);
-  const at = now instanceof Date ? now.toISOString() : str(now) || new Date().toISOString();
-  const cite = (sids) => {
-    if (!citekey) return '';
-    const pages = pagesOf(sentences, sids);
-    return pages.length ? ` [@${citekey}, ${locator(pages)}]` : ` [@${citekey}]`;
-  };
+  const meta = source?.meta ?? {};
+  const title = titleOf(source);
+  const doi = inline(meta.doi);
+  const authors = (Array.isArray(meta.authors) ? meta.authors : []).map(inline).filter(Boolean);
+  const year = yearOf(meta);
+  const zotero = zoteroLink(source);
+  const summaryLink = hasSummary ? `[[${summaryNoteName(source)}]]` : null;
+  const at = stamp(now);
   const L = [];
 
-  L.push('---', `citekey: ${JSON.stringify(citekey ?? id)}`, `title: ${JSON.stringify(title)}`);
-  if (citekey) L.push(`zotero_note: ${JSON.stringify(`[[@${citekey}]]`)}`);
-  L.push('paper_reader: true', `updated: ${JSON.stringify(at)}`, 'tags: [paper-reading]', '---');
+  L.push('---', `citekey: ${q(citekey ?? id)}`, `title: ${q(title)}`, `authors: [${authors.map(q).join(', ')}]`);
+  if (year) L.push(`year: ${year}`);
+  if (doi) L.push(`doi: ${q(doi)}`);
+  if (zotero) L.push(`zotero: ${q(zotero)}`);
+  L.push(`summary: ${q(summaryLink ?? '요약 없음')}`, 'tags: [paper]', '---');
 
-  L.push(BEGIN, `# ${title} — 읽기 노트`);
-  const info = citekey ? [`원 노트: [[@${citekey}]]`, `인용: [@${citekey}]`] : [`논문 id: ${inline(id)}`];
-  if (doi) info.push(`DOI: [${doi}](https://doi.org/${encodeURI(doi)})`);
-  L.push(`> [!info] ${info.join(' · ')}`);
-  L.push(`> 이 칸은 paper-reader에서 보낼 때마다 새로 씁니다(보낸 시각 ${at}). 내 글은 맨 아래 "내 생각"에 적으세요.`);
-  L.push('> 쪽 번호는 PDF 쪽 기준입니다(인쇄된 쪽과 다를 수 있음).', '');
+  L.push(BEGIN, `# ${title}`, '> [!info] 논문 정보');
+  const facts = [];
+  if (authors.length) facts.push(`저자: ${authors.join(', ')}`);
+  if (year) facts.push(`연도: ${year}`);
+  if (doi) facts.push(`DOI: [${doi}](https://doi.org/${encodeURI(doi)})`);
+  if (!citekey) facts.push(`논문 id: ${inline(id)}`);
+  if (facts.length) L.push(`> ${facts.join(' · ')}`);
+  const links = [];
+  if (citekey) links.push(`인용: [@${citekey}]`);
+  if (zotero) links.push(`[Zotero에서 열기](${zotero})`);
+  links.push(summaryLink ? `요약 보기 ${summaryLink}` : '요약 없음');
+  L.push(`> ${links.join(' · ')}`);
+  L.push(`> 쪽 번호는 PDF 쪽 기준입니다(인쇄된 쪽과 다를 수 있음). 이 칸은 paper-reader에서 보낼 때마다 새로 씁니다(보낸 시각 ${at}). 내 글은 맨 아래 "내 생각"에 적으세요.`, '');
 
-  const cards = Array.isArray(digest?.cards) ? digest.cards : [];
-  if (!digest) {
-    L.push('요약이 아직 없습니다.', '');
-  } else {
-    const tk = digest.takeaway;
-    if (tk?.text) {
-      const ev = known(sentences, tk.evidence);
-      L.push('## 핵심', `${para(tk.text)}${cite(ev)}`, ...quoteLines(sentences, ev, '> '), '');
-    }
-    if (cards.length) {
-      L.push('## 카드 요약');
-      cards.forEach((c, i) => {
-        const section = SECTION_LABELS[c.section] ?? inline(c.section);
-        L.push(`### ${i + 1}. ${inline(c.question)}${section ? ` · ${section}` : ''}`);
-        if (inline(c.answer)) L.push(para(c.answer));
-        if (inline(c.explain)) L.push('', para(c.explain), '');
-        for (const it of c.items ?? []) {
-          const ev = known(sentences, it.evidence);
-          L.push(`- ${inline(it.text)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '));
-        }
-        for (const bn of c.bigNumbers ?? []) {
-          const ev = known(sentences, bn.evidence);
-          L.push(`- **${inline(bn.value)}** ${inline(bn.label)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '));
-        }
-        for (const t of c.tables ?? []) {
-          const ev = known(sentences, t.evidence);
-          L.push(`- 표: ${inline(t.title)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '), '');
-          L.push(`| ${t.columns.map(cell).join(' | ')} |`, `| ${t.columns.map(() => '---').join(' | ')} |`);
-          for (const r of t.rows) L.push(`| ${r.map(cell).join(' | ')} |`);
-          if (inline(t.note)) L.push('', para(t.note));
-        }
-        L.push('');
-      });
-    }
-  }
-
-  L.push('## 내 하이라이트·메모');
+  L.push('## 하이라이트');
   const marks = [];
   for (const h of Array.isArray(notes?.highlights) ? notes.highlights : []) {
     const sids = known(sentences, h?.sentenceIds);
@@ -195,7 +215,7 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
   const firstPage = (m) => (m.sids.length ? sentences[m.sids[0]].page : Number.isFinite(m.page) ? m.page : Infinity);
   const firstSeq = (m) => (m.sids.length ? seqOf(m.sids[0]) : Infinity);
   marks.sort((x, y) => firstPage(x) - firstPage(y) || firstSeq(x) - firstSeq(y) || Number(x.zotero) - Number(y.zotero));
-  if (!marks.length) L.push('하이라이트가 없습니다.', '');
+  if (!marks.length) L.push('아직 없습니다.', '');
   for (const m of marks) {
     const { callout, label } = signalOf(m.color);
     const pages = m.sids.length ? pagesOf(sentences, m.sids) : Number.isFinite(m.page) ? [m.page] : [];
@@ -208,20 +228,89 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
     L.push('');
   }
 
+  L.push('## 카드에 단 메모');
+  const cards = Array.isArray(digest?.cards) ? digest.cards : [];
   const memos = notes?.cardMemos && typeof notes.cardMemos === 'object' ? notes.cardMemos : {};
   const memoIds = Object.keys(memos).filter((k) => str(memos[k]).trim());
-  if (memoIds.length) {
-    const order = ['takeaway', ...cards.map((c) => c.id)];
-    const rank = (k) => (order.includes(k) ? order.indexOf(k) : order.length);
-    memoIds.sort((a, b) => rank(a) - rank(b) || a.localeCompare(b));
-    L.push('### 카드 메모');
-    for (const k of memoIds) {
-      const card = cards.find((c) => c.id === k);
-      const name = k === 'takeaway' ? '핵심' : card ? inline(card.question) || k : inline(k);
+  const order = ['takeaway', ...cards.map((c) => c.id)];
+  // Memos whose card is gone (the summary was regenerated with new cards), as the paper view shows them.
+  const current = memoIds.filter((k) => order.includes(k)).sort((a, b) => order.indexOf(a) - order.indexOf(b));
+  const old = memoIds.filter((k) => !order.includes(k));
+  if (!current.length && !old.length) L.push('아직 없습니다.');
+  for (const k of current) {
+    const card = cards.find((c) => c.id === k);
+    const name = k === 'takeaway' ? '핵심' : inline(card?.question) || inline(k);
+    const [first, ...rest] = lines(memos[k]);
+    L.push(`- **${name}** — ${first}`, ...rest.map((r) => `  ${r}`));
+  }
+  if (old.length) {
+    if (current.length) L.push('');
+    L.push('### 이전 요약의 메모');
+    for (const k of old) {
       const [first, ...rest] = lines(memos[k]);
-      L.push(`- **${name}**: ${first}`, ...rest.map((r) => `  ${r}`));
+      L.push(`- ${first}`, ...rest.map((r) => `  ${r}`));
     }
-    L.push('');
+  }
+  L.push(END);
+  return `${L.join('\n')}\n`;
+}
+
+/**
+ * Summary note: what the AI made — takeaway, card summaries and research-connection notes — with keyword links.
+ * Builds frontmatter + the managed block (BEGIN…END), ending with "\n". Only for a paper with a digest.
+ * researchHeadings: current headings of the research note, or null to skip the check.
+ */
+export function buildSummaryNote({ source, digest, connections, researchNoteName, citekey, now, researchHeadings: headings = null }) {
+  const sentences = sentencesOf(source);
+  const id = source?.id ?? '';
+  const title = titleOf(source);
+  const keywords = noteKeywords(digest);
+  const paperLink = `[[${paperNoteName(source)}]]`;
+  const at = stamp(now);
+  const cite = (sids) => {
+    if (!citekey) return '';
+    const pages = pagesOf(sentences, sids);
+    return pages.length ? ` [@${citekey}, ${locator(pages)}]` : ` [@${citekey}]`;
+  };
+  const L = [];
+
+  L.push('---', `citekey: ${q(citekey ?? id)}`, `paper: ${q(paperLink)}`, `keywords: [${keywords.map(q).join(', ')}]`, 'tags: [paper-summary]', '---');
+  L.push(BEGIN, `# ${title} — 요약`);
+  if (keywords.length) L.push(`키워드: ${keywords.map((k) => `[[${k}]]`).join(' · ')}`);
+  L.push(`논문 노트: ${paperLink}${citekey ? ` · 인용 [@${citekey}]` : ''}`);
+  L.push('> [!info] AI가 논문 내용으로 정리한 요약입니다. 연구 연결 메모는 AI가 쓴 연결점이며 논문 내용이 아닙니다. 쪽 번호는 PDF 쪽 기준.');
+  L.push(`> 이 칸은 paper-reader에서 보낼 때마다 새로 씁니다(보낸 시각 ${at}).`, '');
+
+  const tk = digest?.takeaway;
+  if (tk?.text) {
+    const ev = known(sentences, tk.evidence);
+    L.push('## 핵심', `${para(tk.text)}${cite(ev)}`, ...quoteLines(sentences, ev, '> '), '');
+  }
+  const cards = Array.isArray(digest?.cards) ? digest.cards : [];
+  if (cards.length) {
+    L.push('## 카드 요약');
+    cards.forEach((c, i) => {
+      const section = SECTION_LABELS[c.section] ?? inline(c.section);
+      L.push(`### ${i + 1}. ${inline(c.question)}${section ? ` · ${section}` : ''}`);
+      if (inline(c.answer)) L.push(para(c.answer));
+      if (inline(c.explain)) L.push('', para(c.explain), '');
+      for (const it of c.items ?? []) {
+        const ev = known(sentences, it.evidence);
+        L.push(`- ${inline(it.text)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '));
+      }
+      for (const bn of c.bigNumbers ?? []) {
+        const ev = known(sentences, bn.evidence);
+        L.push(`- **${inline(bn.value)}** ${inline(bn.label)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '));
+      }
+      for (const t of c.tables ?? []) {
+        const ev = known(sentences, t.evidence);
+        L.push(`- 표: ${inline(t.title)}${cite(ev)}`, ...quoteLines(sentences, ev, '  > '), '');
+        L.push(`| ${t.columns.map(cell).join(' | ')} |`, `| ${t.columns.map(() => '---').join(' | ')} |`);
+        for (const r of t.rows) L.push(`| ${r.map(cell).join(' | ')} |`);
+        if (inline(t.note)) L.push('', para(t.note));
+      }
+      L.push('');
+    });
   }
 
   L.push('## 연구 연결 메모 (AI가 쓴 연결점 · 논문 내용 아님)');
@@ -246,16 +335,17 @@ export function buildCompanionNote({ source, digest, notes, connections, researc
 const count = (s, sub) => s.split(sub).length - 1;
 
 /**
- * new file (existing === null) → managed + the user section.
+ * new file (existing === null) → managed + the user section ('' for summary notes: markers only).
  * existing file → only BEGIN…END is replaced; every byte outside stays as it was.
  * Missing, repeated or reversed markers → { error } (never overwrite).
  */
-export function mergeManaged(existing, managed) {
+export function mergeManaged(existing, managed, { userSection = USER_SECTION } = {}) {
   const mb = managed.indexOf(BEGIN);
   const me = managed.indexOf(END);
   if (mb < 0 || me < mb) throw new Error('managed 텍스트에 paper-reader 표시가 없습니다.');
   if (existing === null || existing === undefined) {
-    return { text: `${managed.endsWith('\n') ? managed : `${managed}\n`}\n${USER_SECTION}` };
+    const base = managed.endsWith('\n') ? managed : `${managed}\n`;
+    return { text: userSection ? `${base}\n${userSection}` : base };
   }
   if (count(existing, BEGIN) !== 1 || count(existing, END) !== 1) return { error: MARKER_ERROR };
   const b = existing.indexOf(BEGIN);
